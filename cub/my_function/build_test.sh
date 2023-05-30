@@ -1,0 +1,3 @@
+#!/bin/bash
+/usr/local/cuda-11.3/bin/nvcc -O3 -gencode=arch=compute_80,code=\"sm_80,compute_80\" -lineinfo -o ${1} ${1}.cu -diag-suppress 2464 -Xptxas -v -Xcudafe -#  -Xcompiler -ffloat-store -I/home/v-yinuoliu/yinuoliu/code/thrust/examples -I/home/v-yinuoliu/yinuoliu/code/thrust -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/libcudacxx/include -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/cub/ -I./ -lcusparse
+./${1} --mtx=/home/v-yinuoliu/yinuoliu/code/SparseCodegen/matrix${2}.mtx --i=1
