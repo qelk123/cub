@@ -48,6 +48,17 @@
 
 CUB_NAMESPACE_BEGIN
 
+#define CUB_DETAIL_DEFAULT_L2_BACKOFF_NS 350
+#define CUB_DETAIL_DEFAULT_L2_WRITE_LATENCY_NS 450
+
+#ifndef CUB_DETAIL_L2_BACKOFF_NS
+#define CUB_DETAIL_L2_BACKOFF_NS CUB_DETAIL_DEFAULT_L2_BACKOFF_NS 
+#endif 
+
+#ifndef CUB_DETAIL_L2_WRITE_LATENCY_NS 
+#define CUB_DETAIL_L2_WRITE_LATENCY_NS CUB_DETAIL_DEFAULT_L2_WRITE_LATENCY_NS 
+#endif 
+
 
 /******************************************************************************
  * Prefix functor type for maintaining a running prefix while scanning a
@@ -130,7 +141,7 @@ __device__ __forceinline__ void delay()
                 }));
 }
 
-template <int Delay = 350, unsigned int GridThreshold = 500>
+template <int Delay = CUB_DETAIL_L2_BACKOFF_NS, unsigned int GridThreshold = 500>
 __device__ __forceinline__ void delay_or_prevent_hoisting()
 {
   NV_IF_TARGET(NV_PROVIDES_SM_70,
@@ -138,13 +149,19 @@ __device__ __forceinline__ void delay_or_prevent_hoisting()
                (__threadfence_block();));
 }
 
-template <int Delay = 350, unsigned int GridThreshold = 500>
+template <int Delay = CUB_DETAIL_L2_BACKOFF_NS, unsigned int GridThreshold = 500>
 __device__ __forceinline__ void delay_on_dc_gpu_or_prevent_hoisting()
 {
+#if CUB_DETAIL_L2_BACKOFF_NS == CUB_DETAIL_DEFAULT_L2_BACKOFF_NS 
   NV_DISPATCH_TARGET(
     NV_IS_EXACTLY_SM_80, (delay<Delay, GridThreshold>();),
     NV_PROVIDES_SM_70,   (delay<    0, GridThreshold>();),
     NV_IS_DEVICE,        (__threadfence_block();));
+#else
+  NV_DISPATCH_TARGET(
+    NV_PROVIDES_SM_70,   (delay<Delay, GridThreshold>();),
+    NV_IS_DEVICE,        (__threadfence_block();));
+#endif
 }
 
 }
@@ -761,19 +778,25 @@ struct TilePrefixCallbackOp
     T                           exclusive_prefix;   ///< Exclusive prefix for the tile
     T                           inclusive_prefix;   ///< Inclusive prefix for the tile
 
-    // Constructor
-    __device__ __forceinline__
-    TilePrefixCallbackOp(
-        ScanTileStateT       &tile_status,
-        TempStorage         &temp_storage,
-        ScanOpT              scan_op,
-        int                 tile_idx)
-    :
-        temp_storage(temp_storage.Alias()),
-        tile_status(tile_status),
-        scan_op(scan_op),
-        tile_idx(tile_idx) {}
+    // Constructs prefix functor for a given tile index. 
+    // Precondition: thread blocks processing all of the predecessor tiles were scheduled.
+    __device__ __forceinline__ TilePrefixCallbackOp(ScanTileStateT &tile_status,
+                                                    TempStorage &temp_storage,
+                                                    ScanOpT scan_op,
+                                                    int tile_idx)
+        : temp_storage(temp_storage.Alias())
+        , tile_status(tile_status)
+        , scan_op(scan_op)
+        , tile_idx(tile_idx)
+    {}
 
+    // Computes the tile index and constructs prefix functor with it.
+    // Precondition: thread block per tile assignment.
+    __device__ __forceinline__ TilePrefixCallbackOp(ScanTileStateT &tile_status,
+                                                    TempStorage &temp_storage,
+                                                    ScanOpT scan_op)
+        : TilePrefixCallbackOp(tile_status, temp_storage, scan_op, blockIdx.x)
+    {}
 
     // Block until all predecessors within the warp-wide window have non-invalid status
     __device__ __forceinline__
@@ -815,7 +838,7 @@ struct TilePrefixCallbackOp
         T           window_aggregate;
 
         // Wait for the warp-wide window of predecessor tiles to become valid
-        detail::delay<450>();
+        detail::delay<CUB_DETAIL_L2_WRITE_LATENCY_NS>();
         ProcessWindow(predecessor_idx, predecessor_status, window_aggregate);
 
         // The exclusive tile prefix starts out as the current window aggregate
@@ -869,6 +892,11 @@ struct TilePrefixCallbackOp
         return temp_storage.block_aggregate;
     }
 
+    __device__ __forceinline__
+    int GetTileIdx() const
+    {
+        return tile_idx;
+    }
 };
 
 
