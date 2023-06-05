@@ -115,7 +115,7 @@ void SpmvGold(
                 ++offset)
             {
                 for(int batch_idx_inner = 0; batch_idx_inner < 1; batch_idx_inner++) {
-                    partial += alpha * batch_sparse_matrix[offset + (batch_idx * 1 + batch_idx_inner) * a.num_nonzeros] * vector_x[a.column_indices[offset] + (batch_idx * 1 + batch_idx_inner) * a.num_rows];
+                    partial += alpha * batch_sparse_matrix[offset * BATCH_SIZE + (batch_idx * 1 + batch_idx_inner)] * vector_x[a.column_indices[offset] + (batch_idx * 1 + batch_idx_inner) * a.num_rows];
                 }
             }
             vector_y_out[batch_idx * a.num_rows + row] = partial;

@@ -251,29 +251,7 @@ struct AgentEasier
     };
 
     /// Shared memory type required by this thread block
-    struct _TempStorage
-    {
-        CoordinateT tile_coords[2];
-
-        union Aliasable
-        {
-            // Smem needed for tile of merge items
-            MergeItem merge_items[(ITEMS_PER_THREAD + TILE_ITEMS + 1) * BATCH_SIZE];
-
-            // Smem needed for block exchange
-            typename BlockExchangeT::TempStorage exchange;
-
-            // Smem needed for block-wide reduction
-            typename BlockReduceT::TempStorage reduce;
-
-            // Smem needed for tile scanning
-            typename BlockScanT::TempStorage scan;
-
-            // Smem needed for tile prefix sum
-            typename BlockPrefixSumT::TempStorage prefix_sum;
-
-        } aliasable;
-    };
+    #include "my_shared_memory.cuh"
 
     /// Temporary storage type (unionable)
     struct TempStorage : Uninitialized<_TempStorage> {};
@@ -327,9 +305,9 @@ struct AgentEasier
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
 
         //temp_storage.aliasable.merge_items分成了两个部分一部分存row_end_offset(前半部分)，一部分存tile_nonzeros(后半部分)
-        OffsetT*    s_tile_row_end_offsets  = &temp_storage.aliasable.merge_items[0].row_end_offset;//前面的tile_num_rows + ITEMS_PER_THREAD项的对应的空间用于保存reduction?
-        ValueT*     s_tile_nonzeros         = &temp_storage.aliasable.merge_items[(tile_num_rows + ITEMS_PER_THREAD)*BATCH_SIZE].nonzero;//先计算乘法并保存到shared memory当中
-
+        OffsetT*    s_tile_row_end_offsets  = &temp_storage.aliasable.batch_op.merge_items[0].row_end_offset;//前面的tile_num_rows + ITEMS_PER_THREAD项的对应的空间用于保存reduction?
+        ValueT*     s_tile_nonzeros         = &temp_storage.aliasable.batch_op.merge_items[(tile_num_rows + ITEMS_PER_THREAD)*BATCH_SIZE].nonzero;//先计算乘法并保存到shared memory当中
+        ValueT*     s_input_buffer          = &temp_storage.input_buffer_0[0];
         // Gather the nonzeros for the merge tile into shared memory
 
 
@@ -341,13 +319,14 @@ struct AgentEasier
                                          tile_num_nonzeros,
                                          easier_params.num_nonzeros,
                                          easier_params.num_rows,
+                                         tile_start_coord,
                                          BATCH_LIST,
                                         //  2,
                                          1,
                                          wd_values,
                                          wd_column_indices,
                                          wd_vector_x,
-                                         tile_start_coord,
+                                         s_input_buffer,
                                          s_tile_nonzeros);
 
         // //version 2:only handle batch info when auto code generation
@@ -492,7 +471,7 @@ struct AgentEasier
             CTA_SYNC();
 
             // Scan downsweep and scatter
-            ValueT* s_partials = &temp_storage.aliasable.merge_items[0].nonzero;
+            ValueT* s_partials = &temp_storage.aliasable.batch_op.merge_items[0].nonzero;
 
             if (scan_item[0].key != scan_segment[0][0].key)
             {
