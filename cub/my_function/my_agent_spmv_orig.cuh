@@ -251,7 +251,32 @@ struct AgentEasier
     };
 
     /// Shared memory type required by this thread block
-    #include "my_shared_memory.cuh"
+    struct _TempStorage
+    {
+        CoordinateT tile_coords[2];
+
+        union Aliasable
+        {
+            struct {
+                // #include "my_shared_memory.cuh"
+                // Smem needed for tile of merge items
+                MergeItem merge_items[(TILE_ITEMS + 1) * BATCH_SIZE];
+            } batch_op;
+
+            // Smem needed for block exchange
+            typename BlockExchangeT::TempStorage exchange;
+
+            // Smem needed for block-wide reduction
+            typename BlockReduceT::TempStorage reduce;
+
+            // Smem needed for tile scanning
+            typename BlockScanT::TempStorage scan;
+
+            // Smem needed for tile prefix sum
+            typename BlockPrefixSumT::TempStorage prefix_sum;
+
+        } aliasable;
+    };
 
     /// Temporary storage type (unionable)
     struct TempStorage : Uninitialized<_TempStorage> {};
@@ -307,13 +332,14 @@ struct AgentEasier
         //temp_storage.aliasable.merge_items分成了两个部分一部分存row_end_offset(前半部分)，一部分存tile_nonzeros(后半部分)
         OffsetT*    s_tile_row_end_offsets  = &temp_storage.aliasable.batch_op.merge_items[0].row_end_offset;//前面的tile_num_rows + ITEMS_PER_THREAD项的对应的空间用于保存reduction?
         ValueT*     s_tile_nonzeros         = &temp_storage.aliasable.batch_op.merge_items[(tile_num_rows + ITEMS_PER_THREAD)*BATCH_SIZE].nonzero;//先计算乘法并保存到shared memory当中
-        ValueT*     s_input_buffer          = &temp_storage.input_buffer_0[0];
+        ValueT*     s_input_buffer          = 0;//temp_storage.aliasable.batch_op.batch_aliasable.s_slot_0;
         // Gather the nonzeros for the merge tile into shared memory
 
 
         //version 1:use param to give batch info
         // int BATCH_LIST[2] = { 3, BATCH_SIZE};
         int BATCH_LIST[1] = {BATCH_SIZE};
+        #define use_raw_ptr
         MyStruct::compute_before_scatter(ITEMS_PER_THREAD,
                                          BLOCK_THREADS,
                                          tile_num_nonzeros,
@@ -323,50 +349,18 @@ struct AgentEasier
                                          BATCH_LIST,
                                         //  2,
                                          1,
+                                        #ifndef use_raw_ptr
                                          wd_values,
                                          wd_column_indices,
                                          wd_vector_x,
+                                        #else
+                                         easier_params.d_values,
+                                         easier_params.d_column_indices,
+                                         easier_params.d_vector_x,
+                                        #endif
                                          s_input_buffer,
                                          s_tile_nonzeros);
 
-        // //version 2:only handle batch info when auto code generation
-        // MyStruct::compute_before_scatter_simple(ITEMS_PER_THREAD,
-        //                                         BLOCK_THREADS,
-        //                                         tile_num_nonzeros,
-        //                                         easier_params.num_nonzeros,
-        //                                         easier_params.num_rows,
-        //                                         BATCH_LIST,
-        //                                         2,
-        //                                         wd_values,
-        //                                         wd_column_indices,
-        //                                         wd_vector_x,
-        //                                         tile_start_coord,
-        //                                         s_tile_nonzeros);
-
-
-        // #pragma unroll
-        // for (int ITEM = 0; ITEM < ITEMS_PER_THREAD; ++ITEM)
-        // {
-        //     int nonzero_idx = threadIdx.x + (ITEM * BLOCK_THREADS);
-        //     for (int batch_idx=0; batch_idx < BATCH_SIZE; ++batch_idx) {
-        //         ValueIteratorT a                = wd_values + tile_start_coord.y + nonzero_idx + batch_idx * easier_params.num_nonzeros ;
-        //         ColumnIndicesIteratorT ci       = wd_column_indices + tile_start_coord.y + nonzero_idx;
-        //         ValueT* s                       = s_tile_nonzeros + nonzero_idx * BATCH_SIZE + batch_idx;
-
-        //         if (nonzero_idx < tile_num_nonzeros)
-        //         {
-
-        //             OffsetT column_idx              = *ci;
-        //             ValueT  value                   = *a;
-
-        //             ValueT  vector_value            = wd_vector_x[column_idx * BATCH_SIZE + batch_idx];
-
-        //             ValueT  nonzero                 = value * vector_value;
-
-        //             *s    = nonzero;
-        //         }
-        //     }
-        // }
 
 
         // Gather the row end-offsets for the merge tile into shared memory
