@@ -128,7 +128,9 @@ __launch_bounds__ (int(EasierPolicyT::BLOCK_THREADS))
 __global__ void MyDeviceSpmvKernel(
     EasierParams<ValueT, OffsetT>   easier_params,                ///< [in] SpMV input parameter bundle
     CoordinateT*                    d_tile_coordinates,         ///< [in] Pointer to the temporary array of tile starting coordinates
-    KeyValuePair<OffsetT,ValueT>*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+    // void*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+    KeyValuePair<OffsetT,ValueT>**   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+    // KeyValuePair<OffsetT,ValueT>*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
     int                             num_tiles,                  ///< [in] Number of merge tiles
     #ifdef USE_MULTI_STREAM_PPOST
     void*                           tile_state,                 ///< [in] Tile status interface for fixup reduce-by-key kernel
@@ -210,12 +212,12 @@ template <
     typename    ScanTileStateT>                 ///< Tile status interface type
 __launch_bounds__ (int(AgentTileStateInitPolicyT::BLOCK_THREADS))
 __global__ void MyDeviceTileStateInitKernel(
-    int                         num_tiles,          ///< [in] Total number of tiles for the entire problem
+    int                         num_segment_fixup_tiles,          ///< [in] Total number of tiles for the entire problem
     ScanTileStateT              tile_state         ///< [in] Tile status interface
     )         
 {
 
-        tile_state.InitializeStatus(num_tiles);//only initialize
+        tile_state.InitializeStatus(num_segment_fixup_tiles);//only initialize
     
 }
 
@@ -265,8 +267,8 @@ struct DispatchEasier
     struct Policy600
     {
         typedef AgentEasierPolicy<
-                (sizeof(ValueT) > 4) ? 64 : 128,
-                (sizeof(ValueT) > 4) ? 5 : 7,
+                BLOCK_SIZE,
+                ITEM_PER_THREAD,
                 BatchSize,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
@@ -517,15 +519,46 @@ struct DispatchEasier
                 KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[BatchSize + 1];  // Agent carry-out pairs
                 CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[BatchSize + 2];    // Agent starting coordinates
             #else
-                size_t allocation_sizes[3];
-                if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[0]))) break;    // bytes needed for reduce-by-key tile status descriptors
-                    // allocation_sizes[0] =  (num_tiles + TILE_STATUS_PADDING) * sizeof(TxnWord)
+                // size_t allocation_sizes[3];
+                // if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[0]))) break;    // bytes needed for reduce-by-key tile status descriptors
+                //     // allocation_sizes[0] =  (num_tiles + TILE_STATUS_PADDING) * sizeof(TxnWord)
                 
-                allocation_sizes[1] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
-                allocation_sizes[2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
+                // allocation_sizes[1] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
+                // allocation_sizes[2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
+
+                // // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
+                // void* allocations[3] = {};
+                // if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
+                // //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
+                // if (d_temp_storage == NULL)
+                // {
+                //     // Return if the caller is simply requesting the size of the storage allocation
+                //     break;
+                // }
+
+                // // Construct the tile status interface
+
+                // ScanTileStateT tile_state;
+                // if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[0], allocation_sizes[0]))) break;
+
+
+
+                // // Alias the other allocations
+                // KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
+                // CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
+                const int scatter_op_num = 2;
+                size_t allocation_sizes[scatter_op_num + 3];
+                for (int i = 0; i < scatter_op_num ; i++) {
+                    //batch_size_list[scatter_op_index]
+                    allocation_sizes[i] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
+                }
+                allocation_sizes[scatter_op_num] = scatter_op_num * sizeof(KeyValuePairT *);       // bytes needed for block carry-out pairs
+
+                if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[scatter_op_num + 1]))) break;    // bytes needed for reduce-by-key tile status descriptors
+                allocation_sizes[scatter_op_num + 2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
 
                 // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
-                void* allocations[3] = {};
+                void* allocations[scatter_op_num + 3] = {};
                 if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
                 //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
                 if (d_temp_storage == NULL)
@@ -535,15 +568,20 @@ struct DispatchEasier
                 }
 
                 // Construct the tile status interface
+                KeyValuePairT * carry_out_pairs_list[scatter_op_num];
+                for (int i = 0; i < scatter_op_num ; i++) {
+                    carry_out_pairs_list[i] = (KeyValuePairT *)allocations[i];
+                }
 
+                CubDebugExit(cudaMemcpy((void *)allocations[scatter_op_num], (const void *)carry_out_pairs_list, scatter_op_num * sizeof(KeyValuePairT *), cudaMemcpyHostToDevice));
                 ScanTileStateT tile_state;
-                if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[0], allocation_sizes[0]))) break;
+                if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[scatter_op_num + 1], allocation_sizes[scatter_op_num + 1]))) break;
 
 
 
                 // Alias the other allocations
-                KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
-                CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
+                KeyValuePairT**  d_tile_carry_pairs_list      = (KeyValuePairT**) allocations[scatter_op_num];  // Agent carry-out pairs
+                CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[scatter_op_num + 2];    // Agent starting coordinates
             #endif
 
 
@@ -597,7 +635,9 @@ struct DispatchEasier
             ).doit(spmv_kernel,
                 easier_params,
                 d_tile_coordinates,
-                d_tile_carry_pairs,//output
+                // d_tile_carry_pairs,//output
+                d_tile_carry_pairs_list,//output
+                // (KeyValuePairT *)allocations[0],//output
                 num_merge_tiles,
                 #ifdef USE_MULTI_STREAM_PPOST
                 (void *)tile_state_list,
@@ -658,43 +698,46 @@ struct DispatchEasier
                     }
                 }
                 #else
-                for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
-                    // Log segment_fixup_kernel configuration
-                    #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
-                    _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
-                        segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
-                    #endif
-                    bool is_last = (batch_idx == BatchSize - 1) ? true: false;
-                    // Invoke segment_fixup_kernel
-                    THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
-                        segment_fixup_grid_size, segment_fixup_config.block_threads,
-                        0, stream
-                    ).doit(segment_fixup_kernel,
-                        d_tile_carry_pairs + num_merge_tiles * batch_idx,
-                        easier_params.d_vector_y + easier_params.num_rows * batch_idx,
-                        num_merge_tiles,
-                        num_segment_fixup_tiles,
-                        tile_state);
-
-                    // Check for failure to launch
-                    if (CubDebug(error = cudaPeekAtLastError())) break;
-
-                    // Sync the stream if specified to flush runtime errors
-                    if (!is_last) {
+                for (int scatter_op_index = 0; scatter_op_index < 1; scatter_op_index++) {
+                    for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
+                        // Log segment_fixup_kernel configuration
                         #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
-                        _CubLog("Invoking init_tile_state_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
-                            tile_init_state_grid_size.x, tile_init_state_grid_size.y, tile_init_state_grid_size.z, tile_state_init_config.block_threads, (long long) stream, tile_state_init_config.items_per_thread, tile_state_init_sm_occupancy);
+                        _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
+                            segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
                         #endif
+                        bool is_last = (batch_idx == BatchSize - 1) ? true: false;
+                        // Invoke segment_fixup_kernel
                         THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
-                            tile_init_state_grid_size, tile_state_init_config.block_threads,
+                            segment_fixup_grid_size, segment_fixup_config.block_threads,
                             0, stream
-                        ).doit(tile_state_init_kernel,
+                        ).doit(segment_fixup_kernel,
+                            carry_out_pairs_list[scatter_op_index] + num_merge_tiles * batch_idx,
+                            easier_params.d_vector_y + easier_params.num_rows * batch_idx,
                             num_merge_tiles,
+                            num_segment_fixup_tiles,
                             tile_state);
+
+                        // Check for failure to launch
+                        error = detail::DebugSyncStream(stream);
                         if (CubDebug(error = cudaPeekAtLastError())) break;
+
+                        // Sync the stream if specified to flush runtime errors
+                        if (!is_last) {
+                            #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
+                            _CubLog("Invoking init_tile_state_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
+                                tile_init_state_grid_size.x, tile_init_state_grid_size.y, tile_init_state_grid_size.z, tile_state_init_config.block_threads, (long long) stream, tile_state_init_config.items_per_thread, tile_state_init_sm_occupancy);
+                            #endif
+                            THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
+                                tile_init_state_grid_size, tile_state_init_config.block_threads,
+                                0, stream
+                            ).doit(tile_state_init_kernel,
+                                num_segment_fixup_tiles,
+                                tile_state);
+                            error = detail::DebugSyncStream(stream);
+                            if (CubDebug(error = cudaPeekAtLastError())) break;
+                        }
                     }
                 }
-                error = detail::DebugSyncStream(stream);
                 if (CubDebug(error))
                 {
                 break;
