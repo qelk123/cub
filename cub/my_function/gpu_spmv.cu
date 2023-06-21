@@ -171,11 +171,15 @@ float TestGpuMergeCsrmv(
     void *d_temp_storage = NULL;
 
     // Get amount of temporary storage needed
+    // CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
+    //     d_temp_storage, temp_storage_bytes,
+    //     params.d_values, params.d_row_end_offsets, params.d_column_indices,
+    //     params.d_vector_x, params.d_vector_y,
+    //     params.num_rows, params.num_cols, params.num_nonzeros,
+    //     (cudaStream_t) 0, false));
+
     CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
-        d_temp_storage, temp_storage_bytes,
-        params.d_values, params.d_row_end_offsets, params.d_column_indices,
-        params.d_vector_x, params.d_vector_y,
-        params.num_rows, params.num_cols, params.num_nonzeros,
+        d_temp_storage, temp_storage_bytes, params,
         (cudaStream_t) 0, false));
 
     // Allocate
@@ -185,18 +189,22 @@ float TestGpuMergeCsrmv(
     CubDebugExit(cudaMemcpy(params.d_vector_y, vector_y_in, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyHostToDevice));
 
     // Warmup
+    // CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
+    //     d_temp_storage, temp_storage_bytes,
+    //     params.d_values, params.d_row_end_offsets, params.d_column_indices,
+    //     params.d_vector_x, params.d_vector_y,
+    //     params.num_rows, params.num_cols, params.num_nonzeros, 
+    //     (cudaStream_t) 0, !g_quiet));
     CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
-        d_temp_storage, temp_storage_bytes,
-        params.d_values, params.d_row_end_offsets, params.d_column_indices,
-        params.d_vector_x, params.d_vector_y,
-        params.num_rows, params.num_cols, params.num_nonzeros, 
-        (cudaStream_t) 0, !g_quiet));
-
+        d_temp_storage, temp_storage_bytes, params,
+        (cudaStream_t) 0, false));
 
     ValueT *h_data = (ValueT*) malloc(params.num_rows * BATCH_SIZE * sizeof(ValueT));
+    ValueT *h_data_2 = (ValueT*) malloc(params.num_rows * BATCH_SIZE * sizeof(ValueT));
 
     // Copy data back
     cudaMemcpy(h_data, params.d_vector_y, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_data_2, params.d_vector_y_2, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
 
     //----------------------------------------check result----------------------------------------
     int compare = 0;
@@ -204,7 +212,9 @@ float TestGpuMergeCsrmv(
     std::ofstream outfile("output.txt"); // 创建一个输出文件流对象，并打开名为output.txt的文件
     for (; i < params.num_rows  ; i++) {
         for (int j =0; j < BATCH_SIZE; j++) {
-            if(abs(h_data[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6) {
+            if(abs(h_data[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
+                || abs(h_data_2[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
+            ) {
                 // std::cout<<"wrong index:"<<j * params.num_rows + i<<"\n";
                 compare++;
             }
@@ -218,8 +228,8 @@ float TestGpuMergeCsrmv(
     outfile.close(); // 关闭文件
     if(compare > 0) {
         std::cout<<"wrong number:"<<compare<<"/"<< params.num_rows * BATCH_SIZE <<"\n";
-        printf("\n\t%s\n", compare != 0 ? "MYFAIL" : "MYPASS"); fflush(stdout);
     }
+    printf("\n\t%s\n", compare != 0 ? "MYFAIL" : "MYPASS"); fflush(stdout);
 
     //------------------------------------------time kernel-----------------------------------------
 
@@ -227,11 +237,14 @@ float TestGpuMergeCsrmv(
     float elapsed_ms = 0.0;
     for(int it = 0; it < timing_iterations; ++it)
     {
+        // CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
+        //     d_temp_storage, temp_storage_bytes,
+        //     params.d_values, params.d_row_end_offsets, params.d_column_indices,
+        //     params.d_vector_x, params.d_vector_y,
+        //     params.num_rows, params.num_cols, params.num_nonzeros, 
+        //     (cudaStream_t) 0, false));
         CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
-            d_temp_storage, temp_storage_bytes,
-            params.d_values, params.d_row_end_offsets, params.d_column_indices,
-            params.d_vector_x, params.d_vector_y,
-            params.num_rows, params.num_cols, params.num_nonzeros, 
+            d_temp_storage, temp_storage_bytes, params,
             (cudaStream_t) 0, false));
     }
     cudaThreadSynchronize();
@@ -368,9 +381,11 @@ void RunTest(
     CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_column_indices,  sizeof(OffsetT) * csr_matrix.num_nonzeros));
     CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_x,        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
     #endif
-
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_row_end_offsets, sizeof(OffsetT) * (csr_matrix.num_rows + 1)));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y,        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
+    const OffsetT*  d_row_offsets;
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &d_row_offsets, sizeof(OffsetT) * (csr_matrix.num_rows + 1)));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_2,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
+    params.d_row_end_offsets = d_row_offsets + 1;
     params.num_rows         = csr_matrix.num_rows;
     params.num_cols         = csr_matrix.num_cols;
     params.num_nonzeros     = csr_matrix.num_nonzeros;
@@ -389,7 +404,7 @@ void RunTest(
     CubDebugExit(cudaMemcpy((void *)params.d_column_indices,            (const void *)csr_matrix.column_indices,          sizeof(OffsetT) * csr_matrix.num_nonzeros, cudaMemcpyHostToDevice));
     CubDebugExit(cudaMemcpy((void *)params.d_vector_x,            (const void *)vector_x,          sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
     #endif
-    CubDebugExit(cudaMemcpy((void *)params.d_row_end_offsets,   (const void *)csr_matrix.row_offsets,     sizeof(OffsetT) * (csr_matrix.num_rows + 1), cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)d_row_offsets,   (const void *)csr_matrix.row_offsets,     sizeof(OffsetT) * (csr_matrix.num_rows + 1), cudaMemcpyHostToDevice));
 
 	// Merge-based
     // if (!g_quiet) printf("\n\n");

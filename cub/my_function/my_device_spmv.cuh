@@ -225,6 +225,23 @@ struct Easier_Struct
             stream);
     }
 
+
+    template <int BATCH_SIZE,typename ValueT,typename OffsetT>
+    CUB_DETAIL_RUNTIME_DEBUG_SYNC_IS_NOT_SUPPORTED
+    CUB_RUNTIME_FUNCTION static cudaError_t Easier(void *d_temp_storage,
+                                                  size_t &temp_storage_bytes,
+                                                  EasierParams<ValueT, OffsetT>  params,
+                                                  cudaStream_t stream,
+                                                  bool debug_synchronous)
+    {
+      CUB_DETAIL_RUNTIME_DEBUG_SYNC_USAGE_LOG
+        return DispatchEasier<ValueT, int, BATCH_SIZE>::Dispatch(
+            d_temp_storage,
+            temp_storage_bytes,
+            params,
+            stream);
+    }
+
     //@}  end member group
 };
 

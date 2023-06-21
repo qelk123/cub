@@ -74,7 +74,7 @@ struct AgentEasierPolicy
         BLOCK_THREADS                                                   = _BLOCK_THREADS,                       ///< Threads per thread block
         ITEMS_PER_THREAD                                                = _ITEMS_PER_THREAD,                    ///< Items per thread (per tile of input)
         DIRECT_LOAD_NONZEROS                                            = _DIRECT_LOAD_NONZEROS,                ///< Whether to load nonzeros directly from global during sequential merging (pre-staged through shared memory)
-        BATCH_SIZE                                                      = _BATCH_SIZE
+        // BATCH_SIZE                                                      = _BATCH_SIZE
     };
 
     static const CacheLoadModifier  ROW_OFFSETS_SEARCH_LOAD_MODIFIER    = _ROW_OFFSETS_SEARCH_LOAD_MODIFIER;    ///< Cache load modifier for reading CSR row-offsets
@@ -102,18 +102,22 @@ struct EasierParams
     const OffsetT**  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
     const ValueT**   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
     #else
-    const ValueT*   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
     const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
     const OffsetT*  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    const ValueT*   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    #endif
-    ValueT*         d_vector_y;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
     int             num_rows;            ///< Number of rows of matrix <b>A</b>.
     int             num_cols;            ///< Number of columns of matrix <b>A</b>.
     int             num_nonzeros;        ///< Number of nonzero elements of matrix <b>A</b>.
     ValueT          alpha;               ///< Alpha multiplicand
     ValueT          beta;                ///< Beta addend-multiplicand
-    int             batch_size;
+    
+    //NE
+    const ValueT*   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
+    //NV
+    const ValueT*   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
+    #endif
+    //output NV
+    ValueT*         d_vector_y;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
+    ValueT*         d_vector_y_2;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
 };
 
 
@@ -139,7 +143,7 @@ struct AgentEasier
         BLOCK_THREADS           = AgentEasierPolicyT::BLOCK_THREADS,
         ITEMS_PER_THREAD        = AgentEasierPolicyT::ITEMS_PER_THREAD,
         TILE_ITEMS              = BLOCK_THREADS * ITEMS_PER_THREAD,
-        BATCH_SIZE              = AgentEasierPolicyT::BATCH_SIZE,
+        // BATCH_SIZE              = AgentEasierPolicyT::BATCH_SIZE,
     };
 
     /// 2D merge path coordinate type
@@ -333,9 +337,7 @@ struct AgentEasier
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
 
         //temp_storage.aliasable.merge_items分成了两个部分一部分存row_end_offset(前半部分)，一部分存tile_nonzeros(后半部分)
-        #include "my_shared_memory_binding.cuh"
-
-
+        #include "my_memory_binding.cuh"        
 
         MyStruct::compute_before_scatter_auto_gen( ITEMS_PER_THREAD,BLOCK_THREADS,tile_num_nonzeros,tile_start_coord,
         easier_params.d_vector_x,
@@ -464,7 +466,8 @@ struct AgentEasier
                 #pragma unroll 1
                 for (int item = threadIdx.x; item < tile_num_rows; item += BLOCK_THREADS)
                 {
-                    easier_params.d_vector_y[(tile_start_coord.x + item) + batch_idx * easier_params.num_rows] = s_partials[item];//直接store到global memory
+                    global_result_addr_list[scatter_idx][(tile_start_coord.x + item) + batch_idx * easier_params.num_rows] = s_partials[item];
+                    // easier_params.d_vector_y[(tile_start_coord.x + item) + batch_idx * easier_params.num_rows] = s_partials[item];//直接store到global memory
                 }
 
             }

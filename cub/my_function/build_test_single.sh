@@ -1,0 +1,4 @@
+/usr/local/cuda-11.3/bin/nvcc -D BLOCK_SIZE=128 -D ITEM_PER_THREAD=4 -D BATCH_SIZE_D=4 -O3 --disable-warnings -gencode=arch=compute_80,code=\"sm_80,compute_80\" -lineinfo -o gpu_spmv ./gpu_spmv.cu  -I/home/v-yinuoliu/yinuoliu/code/thrust/examples -I/home/v-yinuoliu/yinuoliu/code/thrust -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/libcudacxx/include -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/cub/ -I./ -lcusparse #--ptxas-options=-v
+# /usr/local/cuda-11.3/bin/nvcc -O3 -gencode=arch=compute_80,code=\"sm_80,compute_80\" -lineinfo -o ${1} ${1}.cu -diag-suppress 2464 -Xptxas -v -Xcudafe -#  -Xcompiler -ffloat-store -I/home/v-yinuoliu/yinuoliu/code/thrust/examples -I/home/v-yinuoliu/yinuoliu/code/thrust -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/libcudacxx/include -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/cub/ -I./ -lcusparse
+echo "MATRIX BATCH_SIZE BLOCK_SIZE ITEM_PER_THREAD time"
+./gpu_spmv --quiet --mtx=${1} --i=100

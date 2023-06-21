@@ -8,7 +8,9 @@ ValueT*     s_tile_nonzeros_1         = &temp_storage.batch_op.merge_items2[(til
 // ValueT*     s_tile_nonzeros_1;//先计算乘法并保存到shared memory当中
 
 const int SCATTER_OP_NUM = 2;
-const int BATCH_SIZE_LIST[2] = {BATCH_SIZE, BATCH_SIZE};
-const int MAX_BATCH_SIZE = BATCH_SIZE;
-ValueT* s_tile_nonzeros_list[2] = {s_tile_nonzeros_0, s_tile_nonzeros_1};
-OffsetT* s_tile_row_end_offsets_list[2] = {s_tile_row_end_offsets_0, s_tile_row_end_offsets_1};
+const int BATCH_SIZE_LIST[SCATTER_OP_NUM] = {BATCH_SIZE, BATCH_SIZE};
+// const int MAX_BATCH_SIZE = BATCH_SIZE;
+ValueT* s_tile_nonzeros_list[SCATTER_OP_NUM] = {s_tile_nonzeros_0, s_tile_nonzeros_1};
+OffsetT* s_tile_row_end_offsets_list[SCATTER_OP_NUM] = {s_tile_row_end_offsets_0, s_tile_row_end_offsets_1};
+
+ValueT* global_result_addr_list[SCATTER_OP_NUM] = {easier_params.d_vector_y, easier_params.d_vector_y_2};

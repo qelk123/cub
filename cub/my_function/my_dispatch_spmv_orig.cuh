@@ -546,11 +546,12 @@ struct DispatchEasier
                 // // Alias the other allocations
                 // KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
                 // CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
-                const int scatter_op_num = 2;
+                #include "my_dispatch_helper.cuh"
+                
                 size_t allocation_sizes[scatter_op_num + 3];
                 for (int i = 0; i < scatter_op_num ; i++) {
                     //batch_size_list[scatter_op_index]
-                    allocation_sizes[i] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
+                    allocation_sizes[i] = num_merge_tiles * batch_size_list[i] * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
                 }
                 allocation_sizes[scatter_op_num] = scatter_op_num * sizeof(KeyValuePairT *);       // bytes needed for block carry-out pairs
 
@@ -644,7 +645,7 @@ struct DispatchEasier
                 #else
                 tile_state,
                 #endif
-                BatchSize,
+                0,//batch size, not used here
                 num_segment_fixup_tiles);
 
             // Check for failure to launch
@@ -698,21 +699,22 @@ struct DispatchEasier
                     }
                 }
                 #else
-                for (int scatter_op_index = 0; scatter_op_index < 1; scatter_op_index++) {
-                    for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
+                for (int scatter_op_index = 0; scatter_op_index < scatter_op_num; scatter_op_index++) {
+                    for (int batch_idx=0; batch_idx < batch_size_list[scatter_op_index]; ++batch_idx) {
                         // Log segment_fixup_kernel configuration
                         #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
                         _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
                             segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
                         #endif
-                        bool is_last = (batch_idx == BatchSize - 1) ? true: false;
+                        // bool is_last = (batch_idx == batch_size_list[scatter_op_index] - 1) ? true: false;
+                        bool is_last = false;
                         // Invoke segment_fixup_kernel
                         THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
                             segment_fixup_grid_size, segment_fixup_config.block_threads,
                             0, stream
                         ).doit(segment_fixup_kernel,
                             carry_out_pairs_list[scatter_op_index] + num_merge_tiles * batch_idx,
-                            easier_params.d_vector_y + easier_params.num_rows * batch_idx,
+                            result_addr_list[scatter_op_index] + easier_params.num_rows * batch_idx,
                             num_merge_tiles,
                             num_segment_fixup_tiles,
                             tile_state);
