@@ -44,7 +44,9 @@
 #include "../thread/thread_operators.cuh"
 #include "../iterator/cache_modified_input_iterator.cuh"
 #include "../iterator/counting_input_iterator.cuh"
-#include "../my_function/function.cuh"
+// #include "../my_function/function.cuh"
+#include <gen_function.cuh>
+
 
 CUB_NAMESPACE_BEGIN
 
@@ -59,7 +61,7 @@ CUB_NAMESPACE_BEGIN
 template <
     int                             _BLOCK_THREADS,                         ///< Threads per thread block
     int                             _ITEMS_PER_THREAD,                      ///< Items per thread (per tile of input)
-    int                             _BATCH_SIZE,                            ///< batch size for batch spmv
+    // int                             _BATCH_SIZE,                            ///< batch size for batch spmv
     CacheLoadModifier               _ROW_OFFSETS_SEARCH_LOAD_MODIFIER,      ///< Cache load modifier for reading CSR row-offsets during search
     CacheLoadModifier               _ROW_OFFSETS_LOAD_MODIFIER,             ///< Cache load modifier for reading CSR row-offsets
     CacheLoadModifier               _COLUMN_INDICES_LOAD_MODIFIER,          ///< Cache load modifier for reading CSR column-indices
@@ -96,28 +98,32 @@ template <
     typename        OffsetT>             ///< Signed integer type for sequence offsets
 struct EasierParams
 {
-    #ifdef USE_LIST
-    const ValueT**   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
+    // #ifdef USE_LIST
+    // const ValueT**   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
+    // const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
+    // const OffsetT**  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
+    // const ValueT**   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
+    // #else
     const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
-    const OffsetT**  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    const ValueT**   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    #else
-    const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
-    const OffsetT*  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
     int             num_rows;            ///< Number of rows of matrix <b>A</b>.
     int             num_cols;            ///< Number of columns of matrix <b>A</b>.
     int             num_nonzeros;        ///< Number of nonzero elements of matrix <b>A</b>.
     ValueT          alpha;               ///< Alpha multiplicand
     ValueT          beta;                ///< Beta addend-multiplicand
     
-    //NE
-    const ValueT*   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    //NV
-    const ValueT*   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    #endif
-    //output NV
-    ValueT*         d_vector_y;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
-    ValueT*         d_vector_y_2;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
+    // //NE
+    // // const OffsetT*  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
+    // const OffsetT*  G_0;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
+    // // const ValueT*   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
+    // const ValueT*   e1;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
+    // //NV
+    // // const ValueT*   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
+    // const ValueT*   v1;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
+    // #endif
+    // //output NV
+    // ValueT*         d_vector_y_0;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
+    // ValueT*         d_vector_y_1;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
+    #include <gen_easier_param_struct.cuh>
 };
 
 
@@ -260,7 +266,8 @@ struct AgentEasier
         CoordinateT tile_coords[2];
 
         struct {
-            #include "my_shared_memory_def.cuh"
+            // #include "my_shared_memory_def.cuh"
+            #include <buffer_def.cuh>
         } batch_op;
 
 
@@ -337,16 +344,22 @@ struct AgentEasier
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
 
         //temp_storage.aliasable.merge_items分成了两个部分一部分存row_end_offset(前半部分)，一部分存tile_nonzeros(后半部分)
-        #include "my_memory_binding.cuh"        
+        // #include "my_memory_binding.cuh"        
+        #include <buffer_binding.cuh>
 
-        MyStruct::compute_before_scatter_auto_gen( ITEMS_PER_THREAD,BLOCK_THREADS,tile_num_nonzeros,tile_start_coord,
-        easier_params.d_vector_x,
-        easier_params.d_values,
-        easier_params.d_column_indices,
-        // s_input_buffer,
-        s_tile_nonzeros_0,
-        s_tile_nonzeros_1
-        );
+        // MyStruct::compute_before_scatter_auto_gen( ITEMS_PER_THREAD,BLOCK_THREADS,tile_num_nonzeros,tile_start_coord,
+        // easier_params.d_vector_x,
+        // easier_params.d_values,
+        // easier_params.d_column_indices,
+        // // s_input_buffer,
+        // s_tile_nonzeros_0,
+        // s_tile_nonzeros_1
+        // );
+
+
+        // #include "my_call_batch_function.cuh"        
+        #include <call_batch_function.cuh>
+
 
         #pragma unroll
         for (int scatter_idx = 0; scatter_idx < SCATTER_OP_NUM; ++scatter_idx) {

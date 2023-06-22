@@ -269,7 +269,7 @@ struct DispatchEasier
         typedef AgentEasierPolicy<
                 BLOCK_SIZE,
                 ITEM_PER_THREAD,
-                BatchSize,
+                // BatchSize,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
@@ -546,7 +546,8 @@ struct DispatchEasier
                 // // Alias the other allocations
                 // KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
                 // CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
-                #include "my_dispatch_helper.cuh"
+                // #include "my_dispatch_helper.cuh"
+                #include <dispatch_helper.cuh>
                 
                 size_t allocation_sizes[scatter_op_num + 3];
                 for (int i = 0; i < scatter_op_num ; i++) {

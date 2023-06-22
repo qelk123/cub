@@ -186,7 +186,8 @@ float TestGpuMergeCsrmv(
     CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
 
     // Reset input/output vector y
-    CubDebugExit(cudaMemcpy(params.d_vector_y, vector_y_in, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy(params.d_vector_y_0, vector_y_in, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyHostToDevice));
+    // CubDebugExit(cudaMemcpy(params.d_vector_y_1, vector_y_in, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyHostToDevice));
 
     // Warmup
     // CubDebugExit(Easier_Struct::Easier<BATCH_SIZE>(
@@ -203,8 +204,8 @@ float TestGpuMergeCsrmv(
     ValueT *h_data_2 = (ValueT*) malloc(params.num_rows * BATCH_SIZE * sizeof(ValueT));
 
     // Copy data back
-    cudaMemcpy(h_data, params.d_vector_y, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_data_2, params.d_vector_y_2, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_data, params.d_vector_y_0, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
+    // cudaMemcpy(h_data_2, params.d_vector_y_1, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
 
     //----------------------------------------check result----------------------------------------
     int compare = 0;
@@ -213,7 +214,7 @@ float TestGpuMergeCsrmv(
     for (; i < params.num_rows  ; i++) {
         for (int j =0; j < BATCH_SIZE; j++) {
             if(abs(h_data[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
-                || abs(h_data_2[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
+                // || abs(h_data_2[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
             ) {
                 // std::cout<<"wrong index:"<<j * params.num_rows + i<<"\n";
                 compare++;
@@ -377,14 +378,14 @@ void RunTest(
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_column_indices_0[0],  sizeof(OffsetT) * csr_matrix.num_nonzeros));
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_vector_x_0[0],        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
     #else
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_values,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_column_indices,  sizeof(OffsetT) * csr_matrix.num_nonzeros));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_x,        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.e1,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.G_0,  sizeof(OffsetT) * csr_matrix.num_nonzeros));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.v1,        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
     #endif
     const OffsetT*  d_row_offsets;
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_row_offsets, sizeof(OffsetT) * (csr_matrix.num_rows + 1)));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_2,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_0,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
+    // CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_1,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
     params.d_row_end_offsets = d_row_offsets + 1;
     params.num_rows         = csr_matrix.num_rows;
     params.num_cols         = csr_matrix.num_cols;
@@ -400,9 +401,9 @@ void RunTest(
     CubDebugExit(cudaMemcpy((void *)d_vector_x_0[0],          (const void *)vector_x,                   sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
     CubDebugExit(cudaMemcpy((void *)params.d_vector_x,            (const void *)d_vector_x_0,          sizeof(ValueT*) * 1, cudaMemcpyHostToDevice));
     #else
-    CubDebugExit(cudaMemcpy((void *)params.d_values,            (const void *)batch_matrix_val,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE, cudaMemcpyHostToDevice));
-    CubDebugExit(cudaMemcpy((void *)params.d_column_indices,            (const void *)csr_matrix.column_indices,          sizeof(OffsetT) * csr_matrix.num_nonzeros, cudaMemcpyHostToDevice));
-    CubDebugExit(cudaMemcpy((void *)params.d_vector_x,            (const void *)vector_x,          sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)params.e1,     (const void *)batch_matrix_val,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)params.G_0,            (const void *)csr_matrix.column_indices,          sizeof(OffsetT) * csr_matrix.num_nonzeros, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)params.v1,       (const void *)vector_x,          sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
     #endif
     CubDebugExit(cudaMemcpy((void *)d_row_offsets,   (const void *)csr_matrix.row_offsets,     sizeof(OffsetT) * (csr_matrix.num_rows + 1), cudaMemcpyHostToDevice));
 
