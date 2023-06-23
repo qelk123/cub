@@ -48,7 +48,7 @@
 const int BATCH_SIZE = BATCH_SIZE_D;
 
 #include <cub/device/device_spmv.cuh>
-#include <cub/my_function/my_device_spmv.cuh>
+#include <cub/auto_codegen_support/device_spmv_patch.cuh>
 #include <cub/util_allocator.cuh>
 #include <cub/iterator/tex_ref_input_iterator.cuh>
 #include "/home/v-yinuoliu/yinuoliu/code/thrust/examples/include/timer.h"
@@ -88,6 +88,7 @@ void SpmvGold(
     ValueT*                         vector_x,
     ValueT*                         vector_y_in,
     ValueT*                         vector_y_out,
+    ValueT*                         vector_y_out_2,
     ValueT*                         batch_sparse_matrix,
     ValueT                          alpha,
     ValueT                          beta)
@@ -137,8 +138,8 @@ void SpmvGold(
                     offset < a.row_offsets[row + 1];
                     ++offset)
                 {
-                    for(int batch_idx_inner = 0; batch_idx_inner < BATCH_SIZE; batch_idx_inner++) {
-                        partial += alpha * batch_sparse_matrix[offset + (batch_idx * BATCH_SIZE + batch_idx_inner) * a.num_nonzeros] * vector_x[a.column_indices[offset] + (batch_idx_inner) * a.num_rows];
+                    for(int batch_idx_inner = 0; batch_idx_inner < 3; batch_idx_inner++) {
+                        partial += alpha * batch_sparse_matrix[offset + (batch_idx * 3 + batch_idx_inner) * a.num_nonzeros] * vector_x[a.column_indices[offset] + (batch_idx_inner) * a.num_rows];
                         // partial += alpha * batch_sparse_matrix[offset + (batch_idx * BATCH_SIZE + batch_idx_inner) * a.num_nonzeros] * vector_x[a.column_indices[offset]  * BATCH_SIZE + (batch_idx_inner)];
                         // partial += alpha * batch_sparse_matrix[offset * BATCH_SIZE + (batch_idx * 1 + batch_idx_inner)] * vector_x[a.column_indices[offset] + (batch_idx * 1 + batch_idx_inner) * a.num_rows];
                     }
@@ -146,7 +147,24 @@ void SpmvGold(
                 vector_y_out[batch_idx * a.num_rows + row] = partial;
             }
         }
-
+    for(int batch_idx = 0; batch_idx < 12; batch_idx++) {
+            for (OffsetT row = 0; row < a.num_rows; ++row)
+            {
+                ValueT partial = 0;
+                for (
+                    OffsetT offset = a.row_offsets[row];
+                    offset < a.row_offsets[row + 1];
+                    ++offset)
+                {
+                    for(int batch_idx_inner = 0; batch_idx_inner < 1; batch_idx_inner++) {
+                        partial += batch_sparse_matrix[offset + (batch_idx * 1 + batch_idx_inner) * a.num_nonzeros] * 2;
+                        // partial += alpha * batch_sparse_matrix[offset + (batch_idx * BATCH_SIZE + batch_idx_inner) * a.num_nonzeros] * vector_x[a.column_indices[offset]  * BATCH_SIZE + (batch_idx_inner)];
+                        // partial += alpha * batch_sparse_matrix[offset * BATCH_SIZE + (batch_idx * 1 + batch_idx_inner)] * vector_x[a.column_indices[offset] + (batch_idx * 1 + batch_idx_inner) * a.num_rows];
+                    }
+                }
+                vector_y_out_2[batch_idx * a.num_rows + row] = partial;
+            }
+        }
 }
 
 
@@ -160,6 +178,7 @@ template <
 float TestGpuMergeCsrmv(
     ValueT*                         vector_y_in,
     ValueT*                         reference_vector_y_out,
+    ValueT*                         reference_vector_y_out_2,
     EasierParams<ValueT, OffsetT>&  params,
     int                             timing_iterations,
     float                           &setup_ms)
@@ -201,11 +220,11 @@ float TestGpuMergeCsrmv(
         (cudaStream_t) 0, false));
 
     ValueT *h_data = (ValueT*) malloc(params.num_rows * BATCH_SIZE * sizeof(ValueT));
-    ValueT *h_data_2 = (ValueT*) malloc(params.num_rows * BATCH_SIZE * sizeof(ValueT));
+    ValueT *h_data_2 = (ValueT*) malloc(params.num_rows * 12 * sizeof(ValueT));
 
     // Copy data back
     cudaMemcpy(h_data, params.d_vector_y_0, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
-    // cudaMemcpy(h_data_2, params.d_vector_y_1, sizeof(ValueT) * params.num_rows * BATCH_SIZE, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_data_2, params.d_vector_y_1, sizeof(ValueT) * params.num_rows * 12, cudaMemcpyDeviceToHost);
 
     //----------------------------------------check result----------------------------------------
     int compare = 0;
@@ -229,6 +248,28 @@ float TestGpuMergeCsrmv(
     outfile.close(); // 关闭文件
     if(compare > 0) {
         std::cout<<"wrong number:"<<compare<<"/"<< params.num_rows * BATCH_SIZE <<"\n";
+    }
+    compare = 0;
+    std::ofstream outfile2("output2.txt"); // 创建一个输出文件流对象，并打开名为output.txt的文件
+    for (i = 0 ; i < params.num_rows  ; i++) {
+        for (int j =0; j < 12; j++) {
+            if(abs(h_data_2[j * params.num_rows + i ] - reference_vector_y_out_2[j * params.num_rows + i ]) > 1e-6
+                // || abs(h_data_2[j * params.num_rows + i ] - reference_vector_y_out[j * params.num_rows + i ]) > 1e-6
+            ) {
+                // std::cout<<"h_data_2[j * params.num_rows + i ]:"<<h_data_2[j * params.num_rows + i ]<<
+                //     "reference_vector_y_out_2[j * params.num_rows + i ]:"<<reference_vector_y_out_2[j * params.num_rows + i ]<<"\n";
+                compare++;
+            }
+            if (outfile2.is_open()) { // 检查文件是否成功打开
+                outfile2 << std::to_string(reference_vector_y_out[j * params.num_rows + i ]) << std::endl; // 向文件中写入数据
+            } else {
+                std::cout << "无法打开文件。" << std::endl;
+            }
+        }
+    }
+    outfile2.close(); // 关闭文件
+    if(compare > 0) {
+        std::cout<<"wrong number:"<<compare<<"/"<< params.num_rows * 12 <<"\n";
     }
     printf("\n\t%s\n", compare != 0 ? "MYFAIL" : "MYPASS"); fflush(stdout);
 
@@ -336,24 +377,29 @@ void RunTest(
 
     // Allocate input and output vectors
 
-    ValueT* vector_x        = new ValueT[csr_matrix.num_cols * BATCH_SIZE];
+    ValueT* vector_x        = new ValueT[csr_matrix.num_cols * 3];
     ValueT* vector_y_in     = new ValueT[csr_matrix.num_rows * BATCH_SIZE];
     ValueT* vector_y_out    = new ValueT[csr_matrix.num_rows * BATCH_SIZE];
+    ValueT* vector_y_out_2    = new ValueT[csr_matrix.num_rows * 12];
     // ValueT* batch_matrix_val    = new ValueT[csr_matrix.num_nonzeros * BATCH_SIZE];
-    ValueT* batch_matrix_val    = new ValueT[csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE];
+    ValueT* batch_matrix_val    = new ValueT[csr_matrix.num_nonzeros * BATCH_SIZE * 3];
+    std::cout<<"before generate\n";
 
     std::srand(0);
-    for (int col = 0; col < csr_matrix.num_cols * BATCH_SIZE; ++col)
+    for (int col = 0; col < csr_matrix.num_cols * 3; ++col)
         vector_x[col] = (rand()%100)/10.0;
         // vector_x[col] = 1;
+    std::cout<<"before generate\n";
     for (int idx = 0; idx < csr_matrix.num_nonzeros ; ++idx)
         for (int batch_id = 0; batch_id < BATCH_SIZE; ++batch_id)
-            for (int batch_id_2 = 0; batch_id_2 < BATCH_SIZE; ++batch_id_2)
-                // batch_matrix_val[(batch_id * BATCH_SIZE + batch_id_2 )*csr_matrix.num_nonzeros + idx] = csr_matrix.values[idx];
-                batch_matrix_val[(batch_id * BATCH_SIZE + batch_id_2 )*csr_matrix.num_nonzeros + idx] = (rand()%100)/10.0;
+            for (int batch_id_2 = 0; batch_id_2 < 3; ++batch_id_2)
+                    // batch_matrix_val[(batch_id * BATCH_SIZE + batch_id_2 )*csr_matrix.num_nonzeros + idx] = csr_matrix.values[idx];
+                    batch_matrix_val[(batch_id * 3 + batch_id_2 )*csr_matrix.num_nonzeros + idx] = (rand()%100)/10.0;
 
     // Compute reference answer
-    SpmvGold(csr_matrix, vector_x, vector_y_in, vector_y_out, batch_matrix_val, alpha, beta);
+    std::cout<<"before gold\n";
+    SpmvGold(csr_matrix, vector_x, vector_y_in, vector_y_out, vector_y_out_2, batch_matrix_val, alpha, beta);
+    std::cout<<"after gold\n";
 
     float avg_ms, setup_ms;
 
@@ -378,14 +424,14 @@ void RunTest(
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_column_indices_0[0],  sizeof(OffsetT) * csr_matrix.num_nonzeros));
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_vector_x_0[0],        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
     #else
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.e1,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.e1,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * 3));
     CubDebugExit(g_allocator.DeviceAllocate((void **) &params.G_0,  sizeof(OffsetT) * csr_matrix.num_nonzeros));
-    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.v1,        sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.v1,        sizeof(ValueT) * csr_matrix.num_cols * 3));
     #endif
     const OffsetT*  d_row_offsets;
     CubDebugExit(g_allocator.DeviceAllocate((void **) &d_row_offsets, sizeof(OffsetT) * (csr_matrix.num_rows + 1)));
     CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_0,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
-    // CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_1,        sizeof(ValueT) * csr_matrix.num_rows * BATCH_SIZE));
+    CubDebugExit(g_allocator.DeviceAllocate((void **) &params.d_vector_y_1,        sizeof(ValueT) * csr_matrix.num_rows * 12));
     params.d_row_end_offsets = d_row_offsets + 1;
     params.num_rows         = csr_matrix.num_rows;
     params.num_cols         = csr_matrix.num_cols;
@@ -401,16 +447,16 @@ void RunTest(
     CubDebugExit(cudaMemcpy((void *)d_vector_x_0[0],          (const void *)vector_x,                   sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
     CubDebugExit(cudaMemcpy((void *)params.d_vector_x,            (const void *)d_vector_x_0,          sizeof(ValueT*) * 1, cudaMemcpyHostToDevice));
     #else
-    CubDebugExit(cudaMemcpy((void *)params.e1,     (const void *)batch_matrix_val,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * BATCH_SIZE, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)params.e1,     (const void *)batch_matrix_val,          sizeof(ValueT) * csr_matrix.num_nonzeros * BATCH_SIZE * 3, cudaMemcpyHostToDevice));
     CubDebugExit(cudaMemcpy((void *)params.G_0,            (const void *)csr_matrix.column_indices,          sizeof(OffsetT) * csr_matrix.num_nonzeros, cudaMemcpyHostToDevice));
-    CubDebugExit(cudaMemcpy((void *)params.v1,       (const void *)vector_x,          sizeof(ValueT) * csr_matrix.num_cols * BATCH_SIZE, cudaMemcpyHostToDevice));
+    CubDebugExit(cudaMemcpy((void *)params.v1,       (const void *)vector_x,          sizeof(ValueT) * csr_matrix.num_cols * 3, cudaMemcpyHostToDevice));
     #endif
     CubDebugExit(cudaMemcpy((void *)d_row_offsets,   (const void *)csr_matrix.row_offsets,     sizeof(OffsetT) * (csr_matrix.num_rows + 1), cudaMemcpyHostToDevice));
 
 	// Merge-based
     // if (!g_quiet) printf("\n\n");
     // printf("Merge-based CsrMV, "); fflush(stdout);
-    avg_ms = TestGpuMergeCsrmv<BATCH_SIZE>(vector_y_in, vector_y_out, params, timing_iterations, setup_ms);
+    avg_ms = TestGpuMergeCsrmv<BATCH_SIZE>(vector_y_in, vector_y_out, vector_y_out_2, params, timing_iterations, setup_ms);
     DisplayPerf(device_giga_bandwidth, setup_ms, avg_ms, csr_matrix);
 
     // Initialize cuSparse

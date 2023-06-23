@@ -44,7 +44,7 @@
 #include "../thread/thread_operators.cuh"
 #include "../iterator/cache_modified_input_iterator.cuh"
 #include "../iterator/counting_input_iterator.cuh"
-// #include "../my_function/function.cuh"
+// #include "./function_patch.cuh"
 #include <gen_function.cuh>
 
 
@@ -98,12 +98,6 @@ template <
     typename        OffsetT>             ///< Signed integer type for sequence offsets
 struct EasierParams
 {
-    // #ifdef USE_LIST
-    // const ValueT**   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    // const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
-    // const OffsetT**  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    // const ValueT**   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    // #else
     const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
     int             num_rows;            ///< Number of rows of matrix <b>A</b>.
     int             num_cols;            ///< Number of columns of matrix <b>A</b>.
@@ -154,64 +148,6 @@ struct AgentEasier
 
     /// 2D merge path coordinate type
     typedef typename CubVector<OffsetT, 2>::Type CoordinateT;
-
-    /// Input iterator wrapper types (for applying cache modifiers)
-
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::ROW_OFFSETS_SEARCH_LOAD_MODIFIER,
-    //         OffsetT,
-    //         OffsetT>
-    //     RowOffsetsSearchIteratorT;
-
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::ROW_OFFSETS_LOAD_MODIFIER,
-    //         OffsetT,
-    //         OffsetT>
-    //     RowOffsetsIteratorT;
-
-    #ifdef USE_LIST
-    typedef CacheModifiedInputIterator<
-        AgentEasierPolicyT::COLUMN_INDICES_LOAD_MODIFIER,
-        const OffsetT*,
-        OffsetT>
-    ColumnIndicesIteratorT;
-
-    typedef CacheModifiedInputIterator<
-            AgentEasierPolicyT::VALUES_LOAD_MODIFIER,
-            const ValueT*,
-            OffsetT>
-        ValueIteratorT;
-
-    typedef CacheModifiedInputIterator<
-            AgentEasierPolicyT::VECTOR_VALUES_LOAD_MODIFIER,
-            const ValueT*,
-            OffsetT>
-        VectorValueIteratorTx;
-    #else
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::COLUMN_INDICES_LOAD_MODIFIER,
-    //         OffsetT,
-    //         OffsetT>
-    //     ColumnIndicesIteratorT;
-
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::VALUES_LOAD_MODIFIER,
-    //         ValueT,
-    //         OffsetT>
-    //     ValueIteratorT;
-
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::VECTOR_VALUES_LOAD_MODIFIER,
-    //         ValueT,
-    //         OffsetT>
-    //     VectorValueIteratorTx;
-    #endif
-
-    // typedef CacheModifiedInputIterator<
-    //         AgentEasierPolicyT::VECTOR_VALUES_LOAD_MODIFIER,
-    //         ValueT,
-    //         OffsetT>
-    //     VectorValueIteratorTy;
 
     // Tuple type for scanning (pairs accumulated segment-value with segment-index)
     typedef KeyValuePair<OffsetT, ValueT> KeyValuePairT;
@@ -266,7 +202,7 @@ struct AgentEasier
         CoordinateT tile_coords[2];
 
         struct {
-            // #include "my_shared_memory_def.cuh"
+            // #include "shared_memory_def_patch.cuh"
             #include <buffer_def.cuh>
         } batch_op;
 
@@ -343,23 +279,11 @@ struct AgentEasier
         int         tile_num_rows           = tile_end_coord.x - tile_start_coord.x;
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
 
-        //temp_storage.aliasable.merge_items分成了两个部分一部分存row_end_offset(前半部分)，一部分存tile_nonzeros(后半部分)
-        // #include "my_memory_binding.cuh"        
+        // #include "memory_binding_patch.cuh"        
         #include <buffer_binding.cuh>
 
-        // MyStruct::compute_before_scatter_auto_gen( ITEMS_PER_THREAD,BLOCK_THREADS,tile_num_nonzeros,tile_start_coord,
-        // easier_params.d_vector_x,
-        // easier_params.d_values,
-        // easier_params.d_column_indices,
-        // // s_input_buffer,
-        // s_tile_nonzeros_0,
-        // s_tile_nonzeros_1
-        // );
-
-
-        // #include "my_call_batch_function.cuh"        
+        // #include "call_batch_function_patch.cuh"        
         #include <call_batch_function.cuh>
-
 
         #pragma unroll
         for (int scatter_idx = 0; scatter_idx < SCATTER_OP_NUM; ++scatter_idx) {
@@ -372,7 +296,7 @@ struct AgentEasier
                 const OffsetT offset =
                 (cub::min)(static_cast<OffsetT>(tile_start_coord.x + item),
                             static_cast<OffsetT>(easier_params.num_rows - 1));
-                s_tile_row_end_offsets_list[scatter_idx][item] = easier_params.d_row_end_offsets[offset];//设置s_tile_row_end_offsets
+                s_tile_row_end_offsets_list[scatter_idx][item] = easier_params.d_row_end_offsets[offset];
             }
 
             CTA_SYNC();
@@ -383,8 +307,8 @@ struct AgentEasier
 
             MergePathSearch(
                 OffsetT(threadIdx.x * ITEMS_PER_THREAD),    // Diagonal
-                s_tile_row_end_offsets_list[scatter_idx],   // List A row_end_offsets 的 substring
-                tile_nonzero_indices,                       // List B nnz 的 substring
+                s_tile_row_end_offsets_list[scatter_idx],   // List A for row_end_offsets
+                tile_nonzero_indices,                       // List B for nnz
                 tile_num_rows,
                 tile_num_nonzeros,
                 thread_start_coord);
@@ -395,7 +319,7 @@ struct AgentEasier
             #pragma unroll
             for (int batch_idx=0; batch_idx < BATCH_SIZE_LIST[scatter_idx]; ++batch_idx) {
             CoordinateT     thread_current_coord = thread_start_coord;
-            KeyValuePairT   scan_segment[ITEMS_PER_THREAD];  //记录每一个item的multiplication的部分累加结果以及对应的row的index值
+            KeyValuePairT   scan_segment[ITEMS_PER_THREAD];
             ValueT running_total = 0.0;
             OffsetT row_end_offset  = s_tile_row_end_offsets_list[scatter_idx][thread_current_coord.x];
             ValueT  nonzero         = s_tile_nonzeros_list[scatter_idx][thread_current_coord.y + (batch_idx) * tile_num_nonzeros];  
@@ -405,24 +329,21 @@ struct AgentEasier
             {
                 if (tile_nonzero_indices[thread_current_coord.y] < row_end_offset)
                 {
-                        // Move down (accumulate)
-                        scan_segment[ITEM].value    = nonzero;
-                        running_total               += nonzero;
-                        // nonzero                     = s_tile_nonzeros[thread_current_coord.y * BATCH_SIZE + batch_idx + 1];
-                        // nonzero                     = s_tile_nonzeros_list[scatter_idx][thread_current_coord.y + (batch_idx + 1) * tile_num_nonzeros];
+                    // Move down (accumulate)
+                    scan_segment[ITEM].value    = nonzero;
+                    running_total               += nonzero;
                     ++thread_current_coord.y;
-                    // nonzero                     = s_tile_nonzeros[thread_current_coord.y * BATCH_SIZE];
                     nonzero                     = s_tile_nonzeros_list[scatter_idx][thread_current_coord.y + (batch_idx) * tile_num_nonzeros];
                 }
                 else
                 {
                     // Move right (reset)
-                        scan_segment[ITEM].value    = 0.0;
-                        running_total               = 0.0;
+                    scan_segment[ITEM].value    = 0.0;
+                    running_total               = 0.0;
                     ++thread_current_coord.x;
                     row_end_offset              = s_tile_row_end_offsets_list[scatter_idx][thread_current_coord.x];
                 }
-                    scan_segment[ITEM].key = thread_current_coord.x;
+                scan_segment[ITEM].key = thread_current_coord.x;
             }
 
             CTA_SYNC();
@@ -433,9 +354,9 @@ struct AgentEasier
             KeyValuePairT       scan_item;
             KeyValuePairT       tile_carry;
 
-            scan_item.value = running_total;//每一个thread负责的最后一行（不完整）的累加值
-            scan_item.key   = thread_current_coord.x;//每一个thread负责的最后一行（不完整）在s_tile_row_end_offsets中的index
-            BlockScanT(temp_storage.aliasable.scan).ExclusiveScan(scan_item, scan_item, scan_op, tile_carry);//reduce by key，拿到了这个block负责的最后一行的partial sum以及index
+            scan_item.value = running_total;
+            scan_item.key   = thread_current_coord.x;
+            BlockScanT(temp_storage.aliasable.scan).ExclusiveScan(scan_item, scan_item, scan_op, tile_carry);
             CTA_SYNC();
 
             if (threadIdx.x == 0)
@@ -480,37 +401,33 @@ struct AgentEasier
                 for (int item = threadIdx.x; item < tile_num_rows; item += BLOCK_THREADS)
                 {
                     global_result_addr_list[scatter_idx][(tile_start_coord.x + item) + batch_idx * easier_params.num_rows] = s_partials[item];
-                    // easier_params.d_vector_y[(tile_start_coord.x + item) + batch_idx * easier_params.num_rows] = s_partials[item];//直接store到global memory
                 }
-
             }
 
             // Output the tile's carry-out
-            if (threadIdx.x == 0)//只有threadIdx.x == 0拿到的是这个block最后一行的最前面一部分的partial sum
+            if (threadIdx.x == 0)
             {
-                    if (HAS_ALPHA) {
-                        tile_carry.value *= easier_params.alpha;
-                    }
+                if (HAS_ALPHA) {
+                    tile_carry.value *= easier_params.alpha;
+                }
 
-                    tile_carry.key += tile_start_coord.x;//得到实际的row index
-                    if (tile_carry.key >= easier_params.num_rows)
-                    {
-                        // FIXME: This works around an invalid memory access in the
-                        // fixup kernel. The underlying issue needs to be debugged and
-                        // properly fixed, but this hack prevents writes to
-                        // out-of-bounds addresses. It doesn't appear to have an effect
-                        // on the validity of the results, since this only affects the
-                        // carry-over from last tile in the input.
-                        tile_carry.key = easier_params.num_rows - 1;
-                        tile_carry.value = ValueT{};
-                    };
-                    if (tile_carry.key >= easier_params.num_rows) {
-                        printf("find over easier_params.num_rows for batch_idx:%d\n",batch_idx);
-                    }
+                tile_carry.key += tile_start_coord.x;
+                if (tile_carry.key >= easier_params.num_rows)
+                {
+                    // FIXME: This works around an invalid memory access in the
+                    // fixup kernel. The underlying issue needs to be debugged and
+                    // properly fixed, but this hack prevents writes to
+                    // out-of-bounds addresses. It doesn't appear to have an effect
+                    // on the validity of the results, since this only affects the
+                    // carry-over from last tile in the input.
+                    tile_carry.key = easier_params.num_rows - 1;
+                    tile_carry.value = ValueT{};
+                };
+                if (tile_carry.key >= easier_params.num_rows) {
+                    printf("find over easier_params.num_rows for batch_idx:%d\n",batch_idx);
+                }
 
-                    d_tile_carry_pairs[scatter_idx][tile_idx + batch_idx * gridDim.x] = tile_carry;//写回到记录部分和的global memory当中
-                    // d_tile_carry_pairs[tile_idx + batch_idx * gridDim.x] = tile_carry;//写回到记录部分和的global memory当中
-
+                d_tile_carry_pairs[scatter_idx][tile_idx + batch_idx * gridDim.x] = tile_carry;
             }
             }
         
@@ -528,8 +445,7 @@ struct AgentEasier
      */
     __device__ __forceinline__ void ConsumeTile(
         CoordinateT*    d_tile_coordinates,     ///< [in] Pointer to the temporary array of tile starting coordinates
-        KeyValuePairT**  d_tile_carry_pairs,     ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
-        // KeyValuePairT*  d_tile_carry_pairs,     ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+        KeyValuePairT** d_tile_carry_pairs,     ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
         int             num_merge_tiles)        ///< [in] Number of merge tiles
     {
         int tile_idx = (blockIdx.x * gridDim.y) + blockIdx.y;    // Current tile index
@@ -560,13 +476,13 @@ struct AgentEasier
             }
             else
             {
-                temp_storage.tile_coords[threadIdx.x] = d_tile_coordinates[tile_idx + threadIdx.x];//拿到当前tile block的起始position以及结束的position
+                temp_storage.tile_coords[threadIdx.x] = d_tile_coordinates[tile_idx + threadIdx.x];
             }
         }
 
         CTA_SYNC();
 
-        CoordinateT tile_start_coord     = temp_storage.tile_coords[0];//每一个thread拿到起始的position
+        CoordinateT tile_start_coord     = temp_storage.tile_coords[0];
         CoordinateT tile_end_coord       = temp_storage.tile_coords[1];
         // Consume multi-segment tile
         ConsumeTile_b(
@@ -574,10 +490,8 @@ struct AgentEasier
             tile_start_coord,
             tile_end_coord,
             d_tile_carry_pairs,
-            Int2Type<AgentEasierPolicyT::DIRECT_LOAD_NONZEROS>());//false here
+            Int2Type<AgentEasierPolicyT::DIRECT_LOAD_NONZEROS>());
     }
-
-
 };
 
 

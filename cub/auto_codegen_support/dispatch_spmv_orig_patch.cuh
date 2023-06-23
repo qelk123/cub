@@ -35,8 +35,7 @@
 #pragma once
 
 #include <cub/agent/agent_segment_fixup.cuh>
-// #include <cub/agent/agent_spmv_orig.cuh>
-#include "./my_agent_spmv_orig.cuh"
+#include "./agent_spmv_orig_patch.cuh"
 #include <cub/agent/single_pass_scan_operators.cuh>
 #include <cub/config.cuh>
 #include <cub/detail/cpp_compatibility.cuh>
@@ -269,7 +268,6 @@ struct DispatchEasier
         typedef AgentEasierPolicy<
                 BLOCK_SIZE,
                 ITEM_PER_THREAD,
-                // BatchSize,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
@@ -519,34 +517,7 @@ struct DispatchEasier
                 KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[BatchSize + 1];  // Agent carry-out pairs
                 CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[BatchSize + 2];    // Agent starting coordinates
             #else
-                // size_t allocation_sizes[3];
-                // if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[0]))) break;    // bytes needed for reduce-by-key tile status descriptors
-                //     // allocation_sizes[0] =  (num_tiles + TILE_STATUS_PADDING) * sizeof(TxnWord)
-                
-                // allocation_sizes[1] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
-                // allocation_sizes[2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
-
-                // // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
-                // void* allocations[3] = {};
-                // if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
-                // //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
-                // if (d_temp_storage == NULL)
-                // {
-                //     // Return if the caller is simply requesting the size of the storage allocation
-                //     break;
-                // }
-
-                // // Construct the tile status interface
-
-                // ScanTileStateT tile_state;
-                // if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[0], allocation_sizes[0]))) break;
-
-
-
-                // // Alias the other allocations
-                // KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
-                // CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
-                // #include "my_dispatch_helper.cuh"
+                // #include "dispatch_helper_patch.cuh"
                 #include <dispatch_helper.cuh>
                 
                 size_t allocation_sizes[scatter_op_num + 3];
@@ -562,7 +533,6 @@ struct DispatchEasier
                 // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
                 void* allocations[scatter_op_num + 3] = {};
                 if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
-                //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
                 if (d_temp_storage == NULL)
                 {
                     // Return if the caller is simply requesting the size of the storage allocation
@@ -578,8 +548,6 @@ struct DispatchEasier
                 CubDebugExit(cudaMemcpy((void *)allocations[scatter_op_num], (const void *)carry_out_pairs_list, scatter_op_num * sizeof(KeyValuePairT *), cudaMemcpyHostToDevice));
                 ScanTileStateT tile_state;
                 if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[scatter_op_num + 1], allocation_sizes[scatter_op_num + 1]))) break;
-
-
 
                 // Alias the other allocations
                 KeyValuePairT**  d_tile_carry_pairs_list      = (KeyValuePairT**) allocations[scatter_op_num];  // Agent carry-out pairs
@@ -609,7 +577,7 @@ struct DispatchEasier
                 // Invoke spmv_search_kernel
                 THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
                     search_grid_size, search_block_size, 0, stream
-                ).doit(spmv_search_kernel,//每一个thread找spmv里面一个block所需要负责的起始坐标
+                ).doit(spmv_search_kernel,
                     num_merge_tiles,
                     d_tile_coordinates,
                     easier_params);
@@ -742,9 +710,7 @@ struct DispatchEasier
                     }
                 }
                 if (CubDebug(error))
-                {
-                break;
-                }
+                    break;
                 #endif
 
 

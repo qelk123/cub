@@ -1,0 +1,10 @@
+ValueT* e1_shared = temp_storage.batch_op.batch_aliasable.s_slot_0;
+OffsetT* s_tile_row_end_offsets_B_einsum = &temp_storage.batch_op.merge_items_B_einsum[0].row_end_offset;
+ValueT* s_tile_nonzeros_B_einsum = &temp_storage.batch_op.merge_items_B_einsum[ (tile_num_rows + ITEMS_PER_THREAD) * 3].nonzero;
+OffsetT* s_tile_row_end_offsets_B_einsum_1 = &temp_storage.batch_op.merge_items_B_einsum_1[0].row_end_offset;
+ValueT* s_tile_nonzeros_B_einsum_1 = &temp_storage.batch_op.merge_items_B_einsum_1[ (tile_num_rows + ITEMS_PER_THREAD) * 3].nonzero;
+const int SCATTER_OP_NUM = 2;
+const int BATCH_SIZE_LIST[SCATTER_OP_NUM] = { 3, 3};
+ValueT* s_tile_nonzeros_list[SCATTER_OP_NUM] = { s_tile_nonzeros_B_einsum, s_tile_nonzeros_B_einsum_1};
+OffsetT* s_tile_row_end_offsets_list[SCATTER_OP_NUM] = { s_tile_row_end_offsets_B_einsum, s_tile_row_end_offsets_B_einsum_1};
+ValueT* global_result_addr_list[SCATTER_OP_NUM] = { easier_params.d_vector_y_0, easier_params.d_vector_y_1};
