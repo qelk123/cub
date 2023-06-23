@@ -48,7 +48,7 @@
 const int BATCH_SIZE = BATCH_SIZE_D;
 
 #include <cub/device/device_spmv.cuh>
-#include <cub/auto_codegen_support/device_spmv_patch.cuh>
+#include <cub/auto_codegen_support/patch/device_spmv_patch.cuh>
 #include <cub/util_allocator.cuh>
 #include <cub/iterator/tex_ref_input_iterator.cuh>
 #include "/home/v-yinuoliu/yinuoliu/code/thrust/examples/include/timer.h"
