@@ -35,10 +35,9 @@
 
 #pragma once
 
-#include <iterator>
-
 #include <cub/agent/agent_scan.cuh>
 #include <cub/config.cuh>
+#include <cub/device/dispatch/tuning/tuning_scan.cuh>
 #include <cub/grid/grid_queue.cuh>
 #include <cub/thread/thread_operators.cuh>
 #include <cub/util_debug.cuh>
@@ -47,6 +46,8 @@
 #include <cub/util_math.cuh>
 
 #include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
+
+#include <iterator>
 
 CUB_NAMESPACE_BEGIN
 
@@ -196,67 +197,6 @@ __launch_bounds__(int(ChainedPolicyT::ActivePolicy::ScanPolicyT::BLOCK_THREADS))
 }
 
 /******************************************************************************
- * Policy
- ******************************************************************************/
-
-template <typename AccumT> ///< Data type
-struct DeviceScanPolicy
-{
-  // For large values, use timesliced loads/stores to fit shared memory.
-  static constexpr bool LargeValues = sizeof(AccumT) > 128;
-  static constexpr BlockLoadAlgorithm ScanTransposedLoad =
-    LargeValues ? BLOCK_LOAD_WARP_TRANSPOSE_TIMESLICED
-                : BLOCK_LOAD_WARP_TRANSPOSE;
-  static constexpr BlockStoreAlgorithm ScanTransposedStore =
-    LargeValues ? BLOCK_STORE_WARP_TRANSPOSE_TIMESLICED
-                : BLOCK_STORE_WARP_TRANSPOSE;
-
-  /// SM350
-  struct Policy350 : ChainedPolicy<350, Policy350, Policy350>
-  {
-    // GTX Titan: 29.5B items/s (232.4 GB/s) @ 48M 32-bit T
-    typedef AgentScanPolicy<128,
-                            12, ///< Threads per block, items per thread
-                            AccumT,
-                            BLOCK_LOAD_DIRECT,
-                            LOAD_CA,
-                            BLOCK_STORE_WARP_TRANSPOSE_TIMESLICED,
-                            BLOCK_SCAN_RAKING>
-      ScanPolicyT;
-  };
-
-  /// SM520
-  struct Policy520 : ChainedPolicy<520, Policy520, Policy350>
-  {
-    // Titan X: 32.47B items/s @ 48M 32-bit T
-    typedef AgentScanPolicy<128,
-                            12, ///< Threads per block, items per thread
-                            AccumT,
-                            BLOCK_LOAD_DIRECT,
-                            LOAD_CA,
-                            ScanTransposedStore,
-                            BLOCK_SCAN_WARP_SCANS>
-      ScanPolicyT;
-  };
-
-  /// SM600
-  struct Policy600 : ChainedPolicy<600, Policy600, Policy520>
-  {
-    typedef AgentScanPolicy<128,
-                            15, ///< Threads per block, items per thread
-                            AccumT,
-                            ScanTransposedLoad,
-                            LOAD_DEFAULT,
-                            ScanTransposedStore,
-                            BLOCK_SCAN_WARP_SCANS>
-      ScanPolicyT;
-  };
-
-  /// MaxPolicy
-  typedef Policy600 MaxPolicy;
-};
-
-/******************************************************************************
  * Dispatch
  ******************************************************************************/
 
@@ -294,7 +234,7 @@ template <typename InputIteratorT,
                 cub::detail::value_t<InputIteratorT>,
                 typename InitValueT::value_type>,
               cub::detail::value_t<InputIteratorT>>,
-          typename SelectedPolicy = DeviceScanPolicy<AccumT>>
+          typename SelectedPolicy = DeviceScanPolicy<AccumT, ScanOpT>>
 struct DispatchScan : SelectedPolicy
 {
   //---------------------------------------------------------------------
