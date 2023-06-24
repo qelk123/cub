@@ -1,0 +1,3 @@
+/usr/local/cuda-11.3/bin/nvcc -D BLOCK_SIZE=32 -D ITEM_PER_THREAD=4 -D BATCH_SIZE_D=4 -O3 --disable-warnings -gencode=arch=compute_80,code=\"sm_80,compute_80\" -lineinfo -o top ./top.cu  -I/home/v-yinuoliu/yinuoliu/code/thrust/examples -I/home/v-yinuoliu/yinuoliu/code/thrust -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/libcudacxx/include -I/home/v-yinuoliu/yinuoliu/code/thrust//dependencies/cub/ -I./ -lcusparse -I/home/v-yinuoliu/yinuoliu/code/SparseCodegen/auto_codegen #--ptxas-options=-v
+echo "MATRIX BATCH_SIZE BLOCK_SIZE ITEM_PER_THREAD time"
+./top --quiet --mtx=${1} --i=100

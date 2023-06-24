@@ -35,8 +35,7 @@
 #pragma once
 
 #include <cub/agent/agent_segment_fixup.cuh>
-// #include <cub/agent/agent_spmv_orig.cuh>
-#include "./my_agent_spmv_orig.cuh"
+#include "./agent_spmv_orig_patch.cuh"
 #include <cub/agent/single_pass_scan_operators.cuh>
 #include <cub/config.cuh>
 #include <cub/detail/cpp_compatibility.cuh>
@@ -94,12 +93,12 @@ __global__ void MyDeviceSpmvSearchKernel(
     int tile_idx = (blockIdx.x * blockDim.x) + threadIdx.x;
     if (tile_idx < num_merge_tiles + 1)
     {
-        OffsetT                         diagonal = (tile_idx * TILE_ITEMS);//diagonal通过均分得到
+        OffsetT                         diagonal = (tile_idx * TILE_ITEMS);
         CoordinateT                     tile_coordinate;
         CountingInputIterator<OffsetT>  nonzero_indices(0);
 
         // Search the merge path
-        MergePathSearch(//根据diagonal进行二分搜索
+        MergePathSearch(
             diagonal,
             RowOffsetsSearchIteratorT(easier_params.d_row_end_offsets),
             nonzero_indices,
@@ -108,7 +107,7 @@ __global__ void MyDeviceSpmvSearchKernel(
             tile_coordinate);
 
         // Output starting offset
-        d_tile_coordinates[tile_idx] = tile_coordinate;//拿到每一个block对应的coordinate
+        d_tile_coordinates[tile_idx] = tile_coordinate;
     }
 }
 
@@ -126,16 +125,11 @@ template <
     bool            HAS_BETA>                   ///< Whether the input parameter Beta is 0
 __launch_bounds__ (int(EasierPolicyT::BLOCK_THREADS))
 __global__ void MyDeviceSpmvKernel(
-    EasierParams<ValueT, OffsetT>   easier_params,                ///< [in] SpMV input parameter bundle
+    EasierParams<ValueT, OffsetT>   easier_params,              ///< [in] SpMV input parameter bundle
     CoordinateT*                    d_tile_coordinates,         ///< [in] Pointer to the temporary array of tile starting coordinates
-    KeyValuePair<OffsetT,ValueT>*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+    KeyValuePair<OffsetT,ValueT>**  d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
     int                             num_tiles,                  ///< [in] Number of merge tiles
-    #ifdef USE_MULTI_STREAM_PPOST
-    void*                           tile_state,                 ///< [in] Tile status interface for fixup reduce-by-key kernel
-    #else
-    ScanTileStateT                  tile_state,
-    #endif
-    int                             batch_size,                 ///< [in] Tile status interface for fixup reduce-by-key kernel
+    ScanTileStateT                  tile_state,                 ///< [in,out] tiles state for fixup kernel
     int                             num_segment_fixup_tiles)    ///< [in] Number of reduce-by-key tiles (fixup grid size)
 {
     // Spmv agent type specialization
@@ -156,12 +150,7 @@ __global__ void MyDeviceSpmvKernel(
         num_tiles);
 
     // Initialize fixup tile status
-    #ifdef USE_MULTI_STREAM_PPOST
-    for (int i = 0; i < batch_size; i++)
-        ((ScanTileStateT *)tile_state)[i].InitializeStatus(num_segment_fixup_tiles);//only initialize
-    #else
-        tile_state.InitializeStatus(num_segment_fixup_tiles);//only initialize
-    #endif
+    tile_state.InitializeStatus(num_segment_fixup_tiles);//only initialize
 }
 
 /**
@@ -206,17 +195,15 @@ __global__ void MyDeviceSegmentFixupKernel(
  * Multi-block reduce-by-key sweep kernel entry point
  */
 template <
-    typename    AgentTileStateInitPolicyT,       ///< Parameterized AgentSegmentFixupPolicy tuning policy type
+    typename    AgentTileStateInitPolicyT,      ///< Parameterized AgentSegmentFixupPolicy tuning policy type
     typename    ScanTileStateT>                 ///< Tile status interface type
 __launch_bounds__ (int(AgentTileStateInitPolicyT::BLOCK_THREADS))
 __global__ void MyDeviceTileStateInitKernel(
-    int                         num_tiles,          ///< [in] Total number of tiles for the entire problem
-    ScanTileStateT              tile_state         ///< [in] Tile status interface
+    int                         num_segment_fixup_tiles,        ///< [in] Total number of tiles for the entire problem
+    ScanTileStateT              tile_state                      ///< [in] Tile status interface
     )         
 {
-
-        tile_state.InitializeStatus(num_tiles);//only initialize
-    
+    tile_state.InitializeStatus(num_segment_fixup_tiles);  // only initialize
 }
 
 
@@ -229,8 +216,8 @@ __global__ void MyDeviceTileStateInitKernel(
  */
 template <
     typename    ValueT,                     ///< Matrix and vector value type
-    typename    OffsetT,
-    int         BatchSize>                    ///< Signed integer type for global offsets
+    typename    OffsetT,                    ///< Matrix index type
+    int         BatchSize>                  ///< Signed integer type for global offsets
 struct DispatchEasier
 {
     //---------------------------------------------------------------------
@@ -265,9 +252,8 @@ struct DispatchEasier
     struct Policy600
     {
         typedef AgentEasierPolicy<
-                (sizeof(ValueT) > 4) ? 64 : 128,
-                (sizeof(ValueT) > 4) ? 5 : 7,
-                BatchSize,
+                BLOCK_SIZE,
+                ITEM_PER_THREAD,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
@@ -291,7 +277,7 @@ struct DispatchEasier
         {
             enum
             {
-                BLOCK_THREADS           = 128,               ///< Threads per thread block
+                BLOCK_THREADS           = 128,          ///< Threads per thread block
                 ITEMS_PER_THREAD        = 1,            ///< Items per thread (per tile of input)
             };
         };
@@ -376,22 +362,20 @@ struct DispatchEasier
      * kernel invocations.
      */
     template <
-        // typename                Spmv1ColKernelT,                    ///< Function type of cub::MyDeviceSpmv1ColKernel
         typename                SpmvSearchKernelT,                  ///< Function type of cub::AgentSpmvSearchKernel
         typename                SpmvKernelT,                        ///< Function type of cub::AgentSpmvKernel
         typename                SegmentFixupKernelT,                ///< Function type of cub::DeviceSegmentFixupKernelT
-        // typename                SpmvEmptyMatrixKernelT,             ///< Function type of cub::MyDeviceSpmvEmptyMatrixKernel
         typename                TileStateInitKernelT>
     CUB_RUNTIME_FUNCTION __forceinline__
     static cudaError_t Dispatch(
         void*                   d_temp_storage,                     ///< [in] Device-accessible allocation of temporary storage.  When NULL, the required allocation size is written to \p temp_storage_bytes and no work is done.
         size_t&                 temp_storage_bytes,                 ///< [in,out] Reference to size in bytes of \p d_temp_storage allocation
-        EasierParamsT&          easier_params,                        ///< SpMV input parameter bundle
+        EasierParamsT&          easier_params,                      ///< SpMV input parameter bundle
         cudaStream_t            stream,                             ///< [in] CUDA stream to launch kernels within.  Default is stream<sub>0</sub>.
         SpmvSearchKernelT       spmv_search_kernel,                 ///< [in] Kernel function pointer to parameterization of AgentSpmvSearchKernel
         SpmvKernelT             spmv_kernel,                        ///< [in] Kernel function pointer to parameterization of AgentSpmvKernel
         SegmentFixupKernelT     segment_fixup_kernel,               ///< [in] Kernel function pointer to parameterization of cub::MyDeviceSegmentFixupKernel
-        TileStateInitKernelT    tile_state_init_kernel,
+        TileStateInitKernelT    tile_state_init_kernel,             ///< [in] Kernel function pointer to parameterization of AgentTileStateInitKernel
         KernelConfig            spmv_config,                        ///< [in] Dispatch parameters that match the policy that \p spmv_kernel was compiled for
         KernelConfig            segment_fixup_config,               ///< [in] Dispatch parameters that match the policy that \p segment_fixup_kernel was compiled for
         KernelConfig            tile_state_init_config)               
@@ -427,15 +411,15 @@ struct DispatchEasier
             if (CubDebug(error = cudaDeviceGetAttribute(&max_dim_x, cudaDevAttrMaxGridDimX, device_ordinal))) break;
 
             // Total number of spmv work items
-            int num_merge_items = easier_params.num_rows + easier_params.num_nonzeros;//用行数加上非零元数
+            int num_merge_items = easier_params.num_rows + easier_params.num_nonzeros;
 
             // Tile sizes of kernels
-            int merge_tile_size              = spmv_config.block_threads * spmv_config.items_per_thread;//一个block handle的item
+            int merge_tile_size              = spmv_config.block_threads * spmv_config.items_per_thread;
             int segment_fixup_tile_size     = segment_fixup_config.block_threads * segment_fixup_config.items_per_thread;
-            int init_state_tile_size       = tile_state_init_config.block_threads * tile_state_init_config.items_per_thread;//一个block handle的item
+            int init_state_tile_size       = tile_state_init_config.block_threads * tile_state_init_config.items_per_thread;
 
             // Number of tiles for kernels
-            int num_merge_tiles            = cub::DivideAndRoundUp(num_merge_items, merge_tile_size);//block的个数
+            int num_merge_tiles            = cub::DivideAndRoundUp(num_merge_items, merge_tile_size);
             int num_segment_fixup_tiles    = cub::DivideAndRoundUp(num_merge_tiles, segment_fixup_tile_size);
             int num_state_init_tiles       = cub::DivideAndRoundUp(num_merge_tiles, init_state_tile_size);
 
@@ -479,85 +463,50 @@ struct DispatchEasier
                 1);
 
             // Get the temporary storage allocation requirements
-            #ifdef USE_MULTI_STREAM_PPOST
-                size_t allocation_sizes[BatchSize + 3];
-                for (int i = 0; i < BatchSize ; i++) {
-                    if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[i]))) break;    // bytes needed for reduce-by-key tile status descriptors
-                }
-                    // allocation_sizes[0] =  (num_tiles + TILE_STATUS_PADDING) * sizeof(TxnWord)
-                allocation_sizes[BatchSize] = BatchSize * sizeof(ScanTileStateT *);       // bytes needed for block carry-out pairs
-                
-                allocation_sizes[BatchSize + 1] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
-                allocation_sizes[BatchSize + 2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
+            // #include "dispatch_helper_patch.cuh"
+            #include <dispatch_helper.cuh>
+            
+            size_t allocation_sizes[scatter_op_num + 3];
+            for (int i = 0; i < scatter_op_num ; i++) {
+                allocation_sizes[i] = num_merge_tiles * batch_size_list[i] * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
+            }
+            allocation_sizes[scatter_op_num] = scatter_op_num * sizeof(KeyValuePairT *);        // bytes needed for block carry-out pairs
 
-                // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
-                void* allocations[BatchSize + 3] = {};
-                if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
-                //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
-                if (d_temp_storage == NULL)
-                {
-                    // Return if the caller is simply requesting the size of the storage allocation
-                    break;
-                }
+            if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[scatter_op_num + 1]))) break;    // bytes needed for reduce-by-key tile status descriptors
+            allocation_sizes[scatter_op_num + 2] = (num_merge_tiles + 1) * sizeof(CoordinateT); // bytes needed for tile starting coordinates
 
-                // Construct the tile status interface
+            // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
+            void* allocations[scatter_op_num + 3] = {};
+            if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
+            if (d_temp_storage == NULL) {
+                // Return if the caller is simply requesting the size of the storage allocation
+                break;
+            }
 
+            // Construct the tile status interface
+            KeyValuePairT * carry_out_pairs_list[scatter_op_num];
+            for (int i = 0; i < scatter_op_num ; i++) {
+                carry_out_pairs_list[i] = (KeyValuePairT *)allocations[i];
+            }
 
+            CubDebugExit(cudaMemcpy((void *)allocations[scatter_op_num], (const void *)carry_out_pairs_list, scatter_op_num * sizeof(KeyValuePairT *), cudaMemcpyHostToDevice));
+            ScanTileStateT tile_state;
+            if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[scatter_op_num + 1], allocation_sizes[scatter_op_num + 1]))) break;
 
-                ScanTileStateT tile_state[BatchSize];
-                for (int i = 0; i < BatchSize ; i++) {
-                    if (CubDebug(error = tile_state[i].Init(num_segment_fixup_tiles, allocations[i], allocation_sizes[i]))) break;
-                }
-
-                CubDebugExit(cudaMemcpy((void *)allocations[BatchSize], (const void *)tile_state, BatchSize * sizeof(ScanTileStateT *), cudaMemcpyHostToDevice));
-
-
-                // Alias the other allocations
-                ScanTileStateT* tile_state_list         = (ScanTileStateT*) allocations[BatchSize];  // Agent carry-out pairs
-                KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[BatchSize + 1];  // Agent carry-out pairs
-                CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[BatchSize + 2];    // Agent starting coordinates
-            #else
-                size_t allocation_sizes[3];
-                if (CubDebug(error = ScanTileStateT::AllocationSize(num_segment_fixup_tiles, allocation_sizes[0]))) break;    // bytes needed for reduce-by-key tile status descriptors
-                    // allocation_sizes[0] =  (num_tiles + TILE_STATUS_PADDING) * sizeof(TxnWord)
-                
-                allocation_sizes[1] = num_merge_tiles * BatchSize * sizeof(KeyValuePairT);       // bytes needed for block carry-out pairs
-                allocation_sizes[2] = (num_merge_tiles + 1) * sizeof(CoordinateT);   // bytes needed for tile starting coordinates
-
-                // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
-                void* allocations[3] = {};
-                if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
-                //从[d_temp_storage,d_temp_storage+temp_storage_bytes)分配合计allocation_sizes的空间并返回对应到每一个global buffer的指针放进allocations中返回
-                if (d_temp_storage == NULL)
-                {
-                    // Return if the caller is simply requesting the size of the storage allocation
-                    break;
-                }
-
-                // Construct the tile status interface
-
-                ScanTileStateT tile_state;
-                if (CubDebug(error = tile_state.Init(num_segment_fixup_tiles, allocations[0], allocation_sizes[0]))) break;
-
-
-
-                // Alias the other allocations
-                KeyValuePairT*  d_tile_carry_pairs      = (KeyValuePairT*) allocations[1];  // Agent carry-out pairs
-                CoordinateT*    d_tile_coordinates      = (CoordinateT*) allocations[2];    // Agent starting coordinates
-            #endif
+            // Alias the other allocations
+            KeyValuePairT**  d_tile_carry_pairs_list  = (KeyValuePairT**) allocations[scatter_op_num];  // Agent carry-out pairs
+            CoordinateT*    d_tile_coordinates        = (CoordinateT*) allocations[scatter_op_num + 2]; // Agent starting coordinates
 
 
             // Get search/init grid dims
             int search_block_size   = INIT_KERNEL_THREADS;
             int search_grid_size    = cub::DivideAndRoundUp(num_merge_tiles + 1, search_block_size);
 
-            if (search_grid_size < sm_count)
-            {
+            if (search_grid_size < sm_count) {
                 // Not enough spmv tiles to saturate the device: have spmv blocks search their own staring coords
                 d_tile_coordinates = NULL;
             }
-            else
-            {
+            else {
                 // Use separate search kernel if we have enough spmv tiles to saturate the device
 
                 // Log spmv_search_kernel configuration
@@ -569,7 +518,7 @@ struct DispatchEasier
                 // Invoke spmv_search_kernel
                 THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
                     search_grid_size, search_block_size, 0, stream
-                ).doit(spmv_search_kernel,//每一个thread找spmv里面一个block所需要负责的起始坐标
+                ).doit(spmv_search_kernel,
                     num_merge_tiles,
                     d_tile_coordinates,
                     easier_params);
@@ -597,14 +546,9 @@ struct DispatchEasier
             ).doit(spmv_kernel,
                 easier_params,
                 d_tile_coordinates,
-                d_tile_carry_pairs,//output
+                d_tile_carry_pairs_list,
                 num_merge_tiles,
-                #ifdef USE_MULTI_STREAM_PPOST
-                (void *)tile_state_list,
-                #else
                 tile_state,
-                #endif
-                BatchSize,
                 num_segment_fixup_tiles);
 
             // Check for failure to launch
@@ -620,89 +564,49 @@ struct DispatchEasier
             // Run reduce-by-key fixup if necessary
             if (num_merge_tiles > 1)
             {
-                #ifdef USE_MULTI_STREAM_PPOST
-                //Stream的初始化
-                cudaStream_t streams[BATCH_SIZE];
-                for (int i = 0; i < BATCH_SIZE; i++) {
-                    cudaStreamCreate(&streams[i]);
-                }
-                // for (int batch_idx=BatchSize-1; batch_idx >= 0; --batch_idx) {
-                for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
-                    // Log segment_fixup_kernel configuration
-                    #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
-                    _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
-                        segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
-                    #endif
-                    // bool is_last = (batch_idx == 0) ? true: false;
-                    // Invoke segment_fixup_kernel
-                    THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
-                        segment_fixup_grid_size, segment_fixup_config.block_threads,
-                        0, streams[batch_idx]
-                    ).doit(segment_fixup_kernel,
-                        d_tile_carry_pairs + num_merge_tiles * batch_idx,
-                        easier_params.d_vector_y + easier_params.num_rows * batch_idx,
-                        num_merge_tiles,
-                        num_segment_fixup_tiles,
-                        tile_state[batch_idx]);
-
-                    // Check for failure to launch
-                    if (CubDebug(error = cudaPeekAtLastError())) break;
-                }
-
-                    // Sync the stream if specified to flush runtime errors
-                for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
-                    error = detail::DebugSyncStream(streams[batch_idx]);
-                    if (CubDebug(error))
-                    {
-                    break;
-                    }
-                }
-                #else
-                for (int batch_idx=0; batch_idx < BatchSize; ++batch_idx) {
-                    // Log segment_fixup_kernel configuration
-                    #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
-                    _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
-                        segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
-                    #endif
-                    bool is_last = (batch_idx == BatchSize - 1) ? true: false;
-                    // Invoke segment_fixup_kernel
-                    THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
-                        segment_fixup_grid_size, segment_fixup_config.block_threads,
-                        0, stream
-                    ).doit(segment_fixup_kernel,
-                        d_tile_carry_pairs + num_merge_tiles * batch_idx,
-                        easier_params.d_vector_y + easier_params.num_rows * batch_idx,
-                        num_merge_tiles,
-                        num_segment_fixup_tiles,
-                        tile_state);
-
-                    // Check for failure to launch
-                    if (CubDebug(error = cudaPeekAtLastError())) break;
-
-                    // Sync the stream if specified to flush runtime errors
-                    if (!is_last) {
+                for (int scatter_op_index = 0; scatter_op_index < scatter_op_num; scatter_op_index++) {
+                    for (int batch_idx=0; batch_idx < batch_size_list[scatter_op_index]; ++batch_idx) {
+                        // Log segment_fixup_kernel configuration
                         #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
-                        _CubLog("Invoking init_tile_state_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
-                            tile_init_state_grid_size.x, tile_init_state_grid_size.y, tile_init_state_grid_size.z, tile_state_init_config.block_threads, (long long) stream, tile_state_init_config.items_per_thread, tile_state_init_sm_occupancy);
+                        _CubLog("Invoking segment_fixup_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
+                            segment_fixup_grid_size.x, segment_fixup_grid_size.y, segment_fixup_grid_size.z, segment_fixup_config.block_threads, (long long) stream, segment_fixup_config.items_per_thread, segment_fixup_sm_occupancy);
                         #endif
+                        // bool is_last = (batch_idx == batch_size_list[scatter_op_index] - 1) ? true: false;
+                        bool is_last = false;
+                        // Invoke segment_fixup_kernel
                         THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
-                            tile_init_state_grid_size, tile_state_init_config.block_threads,
+                            segment_fixup_grid_size, segment_fixup_config.block_threads,
                             0, stream
-                        ).doit(tile_state_init_kernel,
+                        ).doit(segment_fixup_kernel,
+                            carry_out_pairs_list[scatter_op_index] + num_merge_tiles * batch_idx,
+                            result_addr_list[scatter_op_index] + easier_params.num_rows * batch_idx,
                             num_merge_tiles,
+                            num_segment_fixup_tiles,
                             tile_state);
+
+                        // Check for failure to launch
+                        error = detail::DebugSyncStream(stream);
                         if (CubDebug(error = cudaPeekAtLastError())) break;
+
+                        // Sync the stream if specified to flush runtime errors
+                        if (!is_last) {
+                            #ifdef CUB_DETAIL_DEBUG_ENABLE_LOG
+                            _CubLog("Invoking init_tile_state_kernel<<<{%d,%d,%d}, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy\n",
+                                tile_init_state_grid_size.x, tile_init_state_grid_size.y, tile_init_state_grid_size.z, tile_state_init_config.block_threads, (long long) stream, tile_state_init_config.items_per_thread, tile_state_init_sm_occupancy);
+                            #endif
+                            THRUST_NS_QUALIFIER::cuda_cub::launcher::triple_chevron(
+                                tile_init_state_grid_size, tile_state_init_config.block_threads,
+                                0, stream
+                            ).doit(tile_state_init_kernel,
+                                num_segment_fixup_tiles,
+                                tile_state);
+                            error = detail::DebugSyncStream(stream);
+                            if (CubDebug(error = cudaPeekAtLastError())) break;
+                        }
                     }
                 }
-                error = detail::DebugSyncStream(stream);
                 if (CubDebug(error))
-                {
-                break;
-                }
-                #endif
-
-
-
+                    break;
             }
         }
         while (0);
@@ -717,7 +621,7 @@ struct DispatchEasier
     static cudaError_t Dispatch(
         void*                   d_temp_storage,                     ///< [in] Device-accessible allocation of temporary storage.  When NULL, the required allocation size is written to \p temp_storage_bytes and no work is done.
         size_t&                 temp_storage_bytes,                 ///< [in,out] Reference to size in bytes of \p d_temp_storage allocation
-        EasierParamsT&            easier_params,                        ///< SpMV input parameter bundle
+        EasierParamsT&          easier_params,                    ///< SpMV input parameter bundle
         cudaStream_t            stream = 0)                         ///< [in] <b>[optional]</b> CUDA stream to launch kernels within.  Default is stream<sub>0</sub>.
     {
         cudaError error = cudaSuccess;

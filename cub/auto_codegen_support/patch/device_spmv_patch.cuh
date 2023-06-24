@@ -40,7 +40,7 @@
 
 #include <cub/config.cuh>
 // #include <cub/device/dispatch/dispatch_spmv_orig.cuh>
-#include "./my_dispatch_spmv_orig.cuh"
+#include "./dispatch_spmv_orig_patch.cuh"
 #include <cub/util_deprecated.cuh>
 
 CUB_NAMESPACE_BEGIN
@@ -123,80 +123,15 @@ struct Easier_Struct
      *
      * \tparam ValueT       <b>[inferred]</b> Matrix and vector value type (e.g., /p float, /p double, etc.)
      */
-    // template <
-    //     int                 BATCH_SIZE,
-    //     typename            ValueT
-    //     >
-    // CUB_RUNTIME_FUNCTION
-    // static cudaError_t Easier(
-    //     void*               d_temp_storage,                     ///< [in] Device-accessible allocation of temporary storage.  When NULL, the required allocation size is written to \p temp_storage_bytes and no work is done.
-    //     size_t&             temp_storage_bytes,                 ///< [in,out] Reference to size in bytes of \p d_temp_storage allocation
-    //     #ifdef USE_LIST
-    //     const ValueT*       d_values[],                           ///< [in] Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    //     const int*          d_row_offsets,                      ///< [in] Pointer to the array of \p m + 1 offsets demarcating the start of every row in \p d_column_indices and \p d_values (with the final entry being equal to \p num_nonzeros)
-    //     const int*          d_column_indices[],                   ///< [in] Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    //     const ValueT*       d_vector_x[],                         ///< [in] Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    //     #else
-    //     const ValueT*       d_values,                           ///< [in] Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    //     const int*          d_row_offsets,                      ///< [in] Pointer to the array of \p m + 1 offsets demarcating the start of every row in \p d_column_indices and \p d_values (with the final entry being equal to \p num_nonzeros)
-    //     const int*          d_column_indices,                   ///< [in] Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    //     const ValueT*       d_vector_x,                         ///< [in] Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    //     #endif
-    //     ValueT*             d_vector_y,                         ///< [out] Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
-    //     int                 num_rows,                           ///< [in] number of rows of matrix <b>A</b>.
-    //     int                 num_cols,                           ///< [in] number of columns of matrix <b>A</b>.
-    //     int                 num_nonzeros,                       ///< [in] number of nonzero elements of matrix <b>A</b>.
-    //     cudaStream_t        stream = 0)                         ///< [in] <b>[optional]</b> CUDA stream to launch kernels within.  Default is stream<sub>0</sub>.
-
-    // {
-    //     // struct EasierParams
-    //     // {
-    //     //     const ValueT**   d_values;            ///< Pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    //     //     const OffsetT*  d_row_end_offsets;   ///< Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
-    //     //     const OffsetT**  d_column_indices;    ///< Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    //     //     const ValueT**   d_vector_x;          ///< Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    //     //     ValueT*         d_vector_y;          ///< Pointer to the array of \p num_rows values corresponding to the dense output vector <em>y</em>
-    //     //     int             num_rows;            ///< Number of rows of matrix <b>A</b>.
-    //     //     int             num_cols;            ///< Number of columns of matrix <b>A</b>.
-    //     //     int             num_nonzeros;        ///< Number of nonzero elements of matrix <b>A</b>.
-    //     //     ValueT          alpha;               ///< Alpha multiplicand
-    //     //     ValueT          beta;                ///< Beta addend-multiplicand
-    //     //     int             batch_size;
-    //     // };
-    //     EasierParams<ValueT, int> spmv_params;
-    //     spmv_params.d_values             = d_values;
-    //     spmv_params.d_row_end_offsets    = d_row_offsets + 1;
-    //     spmv_params.d_column_indices     = d_column_indices;
-    //     spmv_params.d_vector_x           = d_vector_x;
-    //     spmv_params.d_vector_y           = d_vector_y;
-    //     spmv_params.num_rows             = num_rows;
-    //     spmv_params.num_cols             = num_cols;
-    //     spmv_params.num_nonzeros         = num_nonzeros;
-    //     spmv_params.alpha                = ValueT{1};
-    //     spmv_params.beta                 = ValueT{0};
-
-    //     return DispatchEasier<ValueT, int, BATCH_SIZE>::Dispatch(
-    //         d_temp_storage,
-    //         temp_storage_bytes,
-    //         spmv_params,
-    //         stream);
-    // }
 
     template <int BATCH_SIZE,typename ValueT>
     CUB_DETAIL_RUNTIME_DEBUG_SYNC_IS_NOT_SUPPORTED
     CUB_RUNTIME_FUNCTION static cudaError_t Easier(void *d_temp_storage,
                                                   size_t &temp_storage_bytes,
-                                                  #ifdef USE_LIST
-                                                  const ValueT *d_values[],
-                                                  const int *d_row_offsets,
-                                                  const int *d_column_indices[],
-                                                  const ValueT *d_vector_x[],
-                                                  #else
                                                   const ValueT *d_values,
                                                   const int *d_row_offsets,
                                                   const int *d_column_indices,
                                                   const ValueT *d_vector_x,
-                                                  #endif
                                                   ValueT *d_vector_y,
                                                   int num_rows,
                                                   int num_cols,
@@ -225,7 +160,23 @@ struct Easier_Struct
             stream);
     }
 
-    //@}  end member group
+
+    template <int BATCH_SIZE,typename ValueT,typename OffsetT>
+    CUB_DETAIL_RUNTIME_DEBUG_SYNC_IS_NOT_SUPPORTED
+    CUB_RUNTIME_FUNCTION static cudaError_t Easier(void *d_temp_storage,
+                                                  size_t &temp_storage_bytes,
+                                                  EasierParams<ValueT, OffsetT>  params,
+                                                  cudaStream_t stream,
+                                                  bool debug_synchronous)
+    {
+      CUB_DETAIL_RUNTIME_DEBUG_SYNC_USAGE_LOG
+        return DispatchEasier<ValueT, int, BATCH_SIZE>::Dispatch(
+            d_temp_storage,
+            temp_storage_bytes,
+            params,
+            stream);
+    }
+
 };
 
 
