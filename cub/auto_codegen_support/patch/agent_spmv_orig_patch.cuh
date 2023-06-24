@@ -61,7 +61,6 @@ CUB_NAMESPACE_BEGIN
 template <
     int                             _BLOCK_THREADS,                         ///< Threads per thread block
     int                             _ITEMS_PER_THREAD,                      ///< Items per thread (per tile of input)
-    // int                             _BATCH_SIZE,                            ///< batch size for batch spmv
     CacheLoadModifier               _ROW_OFFSETS_SEARCH_LOAD_MODIFIER,      ///< Cache load modifier for reading CSR row-offsets during search
     CacheLoadModifier               _ROW_OFFSETS_LOAD_MODIFIER,             ///< Cache load modifier for reading CSR row-offsets
     CacheLoadModifier               _COLUMN_INDICES_LOAD_MODIFIER,          ///< Cache load modifier for reading CSR column-indices
@@ -76,7 +75,6 @@ struct AgentEasierPolicy
         BLOCK_THREADS                                                   = _BLOCK_THREADS,                       ///< Threads per thread block
         ITEMS_PER_THREAD                                                = _ITEMS_PER_THREAD,                    ///< Items per thread (per tile of input)
         DIRECT_LOAD_NONZEROS                                            = _DIRECT_LOAD_NONZEROS,                ///< Whether to load nonzeros directly from global during sequential merging (pre-staged through shared memory)
-        // BATCH_SIZE                                                      = _BATCH_SIZE
     };
 
     static const CacheLoadModifier  ROW_OFFSETS_SEARCH_LOAD_MODIFIER    = _ROW_OFFSETS_SEARCH_LOAD_MODIFIER;    ///< Cache load modifier for reading CSR row-offsets
@@ -240,13 +238,6 @@ struct AgentEasier
 
     EasierParams<ValueT, OffsetT>&    easier_params;
 
-    // ValueIteratorT                  wd_values;            ///< Wrapped pointer to the array of \p num_nonzeros values of the corresponding nonzero elements of matrix <b>A</b>.
-    // RowOffsetsIteratorT             wd_row_end_offsets;   ///< Wrapped Pointer to the array of \p m offsets demarcating the end of every row in \p d_column_indices and \p d_values
-    // ColumnIndicesIteratorT          wd_column_indices;    ///< Wrapped Pointer to the array of \p num_nonzeros column-indices of the corresponding nonzero elements of matrix <b>A</b>.  (Indices are zero-valued.)
-    // VectorValueIteratorTx            wd_vector_x;          ///< Wrapped Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-    // VectorValueIteratorTy            wd_vector_y;          ///< Wrapped Pointer to the array of \p num_cols values corresponding to the dense input vector <em>x</em>
-
-
     //---------------------------------------------------------------------
     // Interface
     //---------------------------------------------------------------------
@@ -260,11 +251,6 @@ struct AgentEasier
     :
         temp_storage(temp_storage.Alias()),
         easier_params(easier_params)
-        // wd_values(easier_params.d_values),
-        // wd_row_end_offsets(easier_params.d_row_end_offsets),
-        // wd_column_indices(easier_params.d_column_indices),
-        // wd_vector_x(easier_params.d_vector_x),
-        // wd_vector_y(easier_params.d_vector_y)
     {}
 
 
@@ -272,7 +258,6 @@ struct AgentEasier
         int             tile_idx,
         CoordinateT     tile_start_coord,
         CoordinateT     tile_end_coord,
-        // KeyValuePairT*  d_tile_carry_pairs,
         KeyValuePairT**  d_tile_carry_pairs,
         Int2Type<false> is_direct_load)     ///< Marker type indicating whether to load nonzeros directly during path-discovery or beforehand in batch
     {
@@ -287,8 +272,6 @@ struct AgentEasier
 
         #pragma unroll
         for (int scatter_idx = 0; scatter_idx < SCATTER_OP_NUM; ++scatter_idx) {
-        // for (int scatter_idx = 0; scatter_idx < 1; ++scatter_idx) {
-
             // Gather the row end-offsets for the merge tile into shared memory
             #pragma unroll 1
             for (int item = threadIdx.x; item < tile_num_rows + ITEMS_PER_THREAD; item += BLOCK_THREADS)
@@ -423,16 +406,11 @@ struct AgentEasier
                     tile_carry.key = easier_params.num_rows - 1;
                     tile_carry.value = ValueT{};
                 };
-                if (tile_carry.key >= easier_params.num_rows) {
-                    printf("find over easier_params.num_rows for batch_idx:%d\n",batch_idx);
-                }
-
                 d_tile_carry_pairs[scatter_idx][tile_idx + batch_idx * gridDim.x] = tile_carry;
             }
             }
         
         }
-
         // Return the tile's running carry-out
         return;
     }

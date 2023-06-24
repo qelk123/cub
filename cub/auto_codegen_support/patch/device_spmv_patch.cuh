@@ -177,7 +177,6 @@ struct Easier_Struct
             stream);
     }
 
-    //@}  end member group
 };
 
 
